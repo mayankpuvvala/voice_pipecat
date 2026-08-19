@@ -1,0 +1,4 @@
+pipecat-ai[openai,silero,webrtc,sarvam,runner]
+python-dotenv
+httpx
+loguru

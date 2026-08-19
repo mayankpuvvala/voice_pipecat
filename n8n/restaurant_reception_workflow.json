@@ -1,0 +1,298 @@
+{
+  "name": "Restaurant Voice Reception (Bot Answers Directly + Google Sheets + Vapi)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Restaurant Voice Reception\n\nTwo branches (two triggers) in one workflow:\n\n1. **Log Interaction** — the Vapi bot calls this webhook (via its `logInteraction` tool) every time it answers a question or takes a message during a call, and n8n appends a row to Google Sheets. Works today with zero phone number — Vapi's free browser \"Talk to Assistant\" test call fires this webhook exactly the same as a real phone call would.\n2. **End of Day** — a nightly Schedule Trigger reads today's rows and places an outbound call (via Vapi's API) to the owner reading a summary. This branch needs a real Vapi phone number to place the call from — see README \"Phase 2\" for when you're ready to wire that up for a signed client.",
+        "height": 260,
+        "width": 560
+      },
+      "id": "3fc1d36c-7af0-4f78-b835-b2b5888b2caa",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "content": "### EDIT ME (both config nodes)\n\n- `timeZone` (e.g. Asia/Kolkata)\n- `googleSheetId` (the spreadsheet ID from its URL) — note: the Sheets nodes below are hardcoded via the dropdown picker, not this expression. Reselect the document/sheet directly on each node instead of relying on this field.\n\nSummary Branch config also needs, once you have a real number (Phase 2):\n- `restaurantName`\n- `ownerPhoneNumber`\n- `vapiPhoneNumberId`\n- `vapiSummaryAssistantId`",
+        "height": 260,
+        "width": 300
+      },
+      "id": "6978f784-a277-4188-a35e-74e45d72162f",
+      "name": "Edit Me Note - Config",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 288]
+    },
+    {
+      "parameters": {
+        "content": "### EDIT ME\nOn **1c. Append Interaction Row** and **2b. Read Today's Rows**: select/recreate a Google Sheets Service Account credential (create a GCP service account, enable Sheets + Drive API, share your sheet with its email as Editor, paste the email + private key into n8n). Both nodes must point at the SAME spreadsheet + tab.\n\nOn **2e. Call Owner via Vapi**: select/create an HTTP Header Auth credential named e.g. \"Vapi API Key\" with header `Authorization: Bearer <your Vapi API key>`. (Only needed once Phase 2 is wired up.)",
+        "height": 220,
+        "width": 320
+      },
+      "id": "f0427d41-9c38-4076-856d-abc32a310d9b",
+      "name": "Edit Me Note - Credentials",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1120, 288]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "restaurant-log-interaction",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "aecb91d8-12f8-4596-9493-bee834f79d2a",
+      "name": "1a. Webhook - Log Interaction",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 288],
+      "webhookId": "4c75547e-7efb-4aa2-836f-dc5cdaf814d8"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "cl1", "name": "timeZone", "type": "string", "value": "Asia/Kolkata" },
+            { "id": "cl2", "name": "googleSheetId", "type": "string", "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "39c54245-798d-4c81-841c-b9b52849d09b",
+      "name": "CONFIG (EDIT ME) - Log Branch",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [464, 288]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('CONFIG (EDIT ME) - Log Branch').first().json;\nconst body = $('1a. Webhook - Log Interaction').first().json.body;\nconst message = body.message || {};\nconst toolCall = (message.toolCalls && message.toolCalls[0]) || null;\n\n// Vapi can send non-tool-call message types (end-of-call-report, status-update, etc.)\n// to this same webhook. Don't crash on those — just pass through as a no-op.\nif (!toolCall) {\n  return [{ json: { skip: true, toolCallId: null } }];\n}\n\nlet args = toolCall.function.arguments || {};\nif (typeof args === 'string') {\n  try { args = JSON.parse(args); } catch (e) { args = {}; }\n}\n\nconst now = new Date();\nreturn [{\n  json: {\n    skip: false,\n    toolCallId: toolCall.id,\n    args,\n    timestamp: now.toISOString(),\n    callDate: now.toLocaleDateString('en-CA', { timeZone: cfg.timeZone }),\n    googleSheetId: cfg.googleSheetId\n  }\n}];"
+      },
+      "id": "166dd47a-c6b5-4688-a7ce-ee6962ad4b53",
+      "name": "1b. Parse Vapi Tool Call",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [688, 288]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "skipc1", "leftValue": "={{ $json.skip }}", "rightValue": false, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d1a2b3c4-1111-4a5b-8c9d-e0f1a2b3c4d5",
+      "name": "1b2. Is Real Tool Call?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [800, 288]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { results: [] } }];"
+      },
+      "id": "e2b3c4d5-2222-4b6c-9d0e-f1a2b3c4d5e6",
+      "name": "1f. Skip Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 460]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $json.googleSheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "CallDate": "={{ $json.callDate }}",
+            "CallerName": "={{ $json.args.callerName }}",
+            "CallerPhone": "={{ $json.args.callerPhone }}",
+            "Topic": "={{ $json.args.topic }}",
+            "Resolved": "={{ $json.args.resolved }}",
+            "Details": "={{ $json.args.details }}",
+            "GuestsCount": "={{ $json.args.guestsCount }}",
+            "Drift": "={{ $json.args.drift }}",
+            "CallConfidence": "={{ $json.args.callConfidence }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "792d462a-0cc5-4741-8156-ead16e195063",
+      "name": "1c. Append Interaction Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [912, 288],
+      "executeOnce": true,
+      "retryOnFail": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleApi": { "id": "REPLACE_ME", "name": "Google Sheets account" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $json;\nreturn [{ json: { results: [{ toolCallId: d.toolCallId, result: \"Got it, thank you!\" }] } }];"
+      },
+      "id": "b5487b1c-e62f-4178-8154-72d1fe35378a",
+      "name": "1d. Format Log Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 288]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "ab1a29e4-ebde-4c10-bc5d-c39c60ee229c",
+      "name": "1e. Respond - Log Ack",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1344, 288]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [ { "field": "cronExpression", "expression": "0 21 * * *" } ]
+        }
+      },
+      "id": "fb980f11-3123-403a-a196-cc032e9af168",
+      "name": "2a. Schedule Trigger - End of Day",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 608]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "cs1", "name": "restaurantName", "type": "string", "value": "Spice Route Kitchen" },
+            { "id": "cs2", "name": "timeZone", "type": "string", "value": "Asia/Kolkata" },
+            { "id": "cs3", "name": "ownerPhoneNumber", "type": "string", "value": "+919800000000" },
+            { "id": "cs4", "name": "vapiPhoneNumberId", "type": "string", "value": "REPLACE_ONCE_YOU_HAVE_A_REAL_VAPI_NUMBER" },
+            { "id": "cs5", "name": "vapiSummaryAssistantId", "type": "string", "value": "REPLACE_WITH_VAPI_SUMMARY_ASSISTANT_ID" },
+            { "id": "cs6", "name": "googleSheetId", "type": "string", "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4c0a8947-9183-4263-b1ff-250a0ce12024",
+      "name": "CONFIG (EDIT ME) - Summary Branch",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [464, 608]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $json.googleSheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "052fadfe-d2be-44ee-bd54-dc5475dc6ef5",
+      "name": "2b. Read Today's Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [688, 608],
+      "credentials": {
+        "googleApi": { "id": "REPLACE_ME", "name": "Google Sheets account" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('CONFIG (EDIT ME) - Summary Branch').first().json;\nconst rows = $input.all().map(i => i.json);\nconst todayStr = new Date().toLocaleDateString('en-CA', { timeZone: cfg.timeZone });\nconst todays = rows.filter(r => r.CallDate === todayStr);\n\nconst resolved = todays.filter(r => String(r.Resolved).toLowerCase() === 'true');\nconst unresolved = todays.filter(r => String(r.Resolved).toLowerCase() !== 'true');\n\nlet summaryText;\nif (todays.length === 0) {\n  summaryText = `No calls came in for ${cfg.restaurantName} today.`;\n} else {\n  const parts = [];\n  parts.push(`You had ${todays.length} call${todays.length === 1 ? '' : 's'} today at ${cfg.restaurantName}.`);\n  if (resolved.length) {\n    parts.push(`I answered ${resolved.length} directly: ` + resolved.map(r => `${r.CallerName || 'a caller'} asked about ${r.Topic}`).join('; ') + '.');\n  }\n  if (unresolved.length) {\n    parts.push(`${unresolved.length} need your attention: ` + unresolved.map(r => `${r.CallerName || 'someone'} at ${r.CallerPhone}, about ${r.Topic}${r.Details ? ' — ' + r.Details : ''}`).join('; ') + '.');\n  }\n  summaryText = parts.join(' ');\n}\n\nreturn [{\n  json: {\n    count: todays.length,\n    summaryText,\n    ownerPhone: cfg.ownerPhoneNumber,\n    assistantId: cfg.vapiSummaryAssistantId,\n    phoneNumberId: cfg.vapiPhoneNumberId\n  }\n}];"
+      },
+      "id": "3ee4464a-c882-4f47-a3a4-f6466e131574",
+      "name": "2c. Filter Today & Build Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [912, 608]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "ifc1", "leftValue": "={{ $json.count }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "eccc8f6c-5fd5-4d01-962c-ffbea1ec2474",
+      "name": "2d. Any Messages Today?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, 608]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.vapi.ai/call",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { assistantId: $json.assistantId, phoneNumberId: $json.phoneNumberId, customer: { number: $json.ownerPhone }, assistantOverrides: { variableValues: { summaryText: $json.summaryText } } } }}",
+        "options": {}
+      },
+      "id": "abebb8d6-5b50-4033-a2e0-1dcdfdea4611",
+      "name": "2e. Call Owner via Vapi",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1344, 544],
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ME", "name": "Vapi API Key" }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "1a. Webhook - Log Interaction": { "main": [[{ "node": "CONFIG (EDIT ME) - Log Branch", "type": "main", "index": 0 }]] },
+    "CONFIG (EDIT ME) - Log Branch": { "main": [[{ "node": "1b. Parse Vapi Tool Call", "type": "main", "index": 0 }]] },
+    "1b. Parse Vapi Tool Call": { "main": [[{ "node": "1b2. Is Real Tool Call?", "type": "main", "index": 0 }]] },
+    "1b2. Is Real Tool Call?": { "main": [[{ "node": "1c. Append Interaction Row", "type": "main", "index": 0 }], [{ "node": "1f. Skip Response", "type": "main", "index": 0 }]] },
+    "1c. Append Interaction Row": { "main": [[{ "node": "1d. Format Log Response", "type": "main", "index": 0 }]] },
+    "1d. Format Log Response": { "main": [[{ "node": "1e. Respond - Log Ack", "type": "main", "index": 0 }]] },
+    "1f. Skip Response": { "main": [[{ "node": "1e. Respond - Log Ack", "type": "main", "index": 0 }]] },
+    "2a. Schedule Trigger - End of Day": { "main": [[{ "node": "CONFIG (EDIT ME) - Summary Branch", "type": "main", "index": 0 }]] },
+    "CONFIG (EDIT ME) - Summary Branch": { "main": [[{ "node": "2b. Read Today's Rows", "type": "main", "index": 0 }]] },
+    "2b. Read Today's Rows": { "main": [[{ "node": "2c. Filter Today & Build Summary", "type": "main", "index": 0 }]] },
+    "2c. Filter Today & Build Summary": { "main": [[{ "node": "2d. Any Messages Today?", "type": "main", "index": 0 }]] },
+    "2d. Any Messages Today?": { "main": [[{ "node": "2e. Call Owner via Vapi", "type": "main", "index": 0 }], []] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "binaryMode": "separate" }
+}
