@@ -23,18 +23,33 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.tts import OpenAITTSService
+from pipecat.evals.transport import EvalTransportParams
 from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
 
+from app.admin.routes import register_admin_routes
 from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN
 from app.config.settings import settings
 from app.pipeline.prompts import build_system_prompt
 from app.tools.log_interaction import log_interaction
 
-# Browser/WebRTC only this phase — no telephony transport wired up yet.
+# pipecat.runner.run exports its FastAPI app specifically so other modules
+# can register routes before calling main() — see that module's docstring.
+from pipecat.runner.run import app as runner_app
+from pipecat.runner.run import main as run_dev_server
+
+register_admin_routes(runner_app)
+
+# Browser/WebRTC is the only caller-facing transport this phase — no
+# telephony yet. "eval" is dev/test-only, for pipecat.evals scripted testing
+# (python -m pipecat.evals run ...), not a production call path.
 transport_params = {
     "webrtc": lambda: TransportParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+    ),
+    "eval": lambda: EvalTransportParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
     ),
@@ -125,6 +140,4 @@ async def bot(runner_args: RunnerArguments) -> None:
 
 
 if __name__ == "__main__":
-    from pipecat.runner.run import main
-
-    main()
+    run_dev_server()

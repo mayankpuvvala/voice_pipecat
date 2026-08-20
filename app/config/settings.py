@@ -22,5 +22,18 @@ class Settings:
     # Same webhook the existing Vapi/n8n workflow already uses.
     n8n_webhook_url: str = os.environ.get("N8N_WEBHOOK_URL", "")
 
+    # /admin reads the sheet directly — same service account n8n's Sheets
+    # credential already uses (it's already been granted Editor on the
+    # sheet, so no separate sharing step needed for read access).
+    google_service_account_email: str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_EMAIL", "")
+    google_service_account_private_key: str = os.environ.get(
+        "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY", ""
+    )
+    google_sheet_id: str = os.environ.get("GOOGLE_SHEET_ID", "")
+
+    # Required once this is reachable off localhost — see auth.py.
+    admin_username: str = os.environ.get("ADMIN_USERNAME", "")
+    admin_password: str = os.environ.get("ADMIN_PASSWORD", "")
+
 
 settings = Settings()

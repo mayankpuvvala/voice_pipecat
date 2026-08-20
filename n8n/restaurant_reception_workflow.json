@@ -69,7 +69,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const cfg = $('CONFIG (EDIT ME) - Log Branch').first().json;\nconst body = $('1a. Webhook - Log Interaction').first().json.body;\nconst message = body.message || {};\nconst toolCall = (message.toolCalls && message.toolCalls[0]) || null;\n\n// Vapi can send non-tool-call message types (end-of-call-report, status-update, etc.)\n// to this same webhook. Don't crash on those — just pass through as a no-op.\nif (!toolCall) {\n  return [{ json: { skip: true, toolCallId: null } }];\n}\n\nlet args = toolCall.function.arguments || {};\nif (typeof args === 'string') {\n  try { args = JSON.parse(args); } catch (e) { args = {}; }\n}\n\nconst now = new Date();\nreturn [{\n  json: {\n    skip: false,\n    toolCallId: toolCall.id,\n    args,\n    timestamp: now.toISOString(),\n    callDate: now.toLocaleDateString('en-CA', { timeZone: cfg.timeZone }),\n    googleSheetId: cfg.googleSheetId\n  }\n}];"
+        "jsCode": "const cfg = $('CONFIG (EDIT ME) - Log Branch').first().json;\nconst body = $('1a. Webhook - Log Interaction').first().json.body;\nconst message = body.message || {};\nconst toolCall = (message.toolCalls && message.toolCalls[0]) || null;\n\n// Vapi can send non-tool-call message types (end-of-call-report, status-update, etc.)\n// to this same webhook. Don't crash on those — just pass through as a no-op.\nif (!toolCall) {\n  return [{ json: { skip: true, toolCallId: null } }];\n}\n\nlet args = toolCall.function.arguments || {};\nif (typeof args === 'string') {\n  try { args = JSON.parse(args); } catch (e) { args = {}; }\n}\n\nconst now = new Date();\nreturn [{\n  json: {\n    skip: false,\n    toolCallId: toolCall.id,\n    googleSheetId: cfg.googleSheetId,\n    // Flat, sheet-header-matching keys so '1c. Append Interaction Row' can\n    // use auto-map instead of a manually maintained field list below it.\n    // Add a new logInteraction argument -> add a matching key here with the\n    // exact column name -> done, no separate node-by-node mapping to touch.\n    Timestamp: now.toISOString(),\n    CallDate: now.toLocaleDateString('en-CA', { timeZone: cfg.timeZone }),\n    CallerName: args.callerName || '',\n    CallerPhone: args.callerPhone || '',\n    Topic: args.topic || '',\n    Resolved: args.resolved,\n    Details: args.details || '',\n    GuestsCount: args.guestsCount || '',\n    Drift: args.drift,\n    CallConfidence: args.callConfidence || ''\n  }\n}];"
       },
       "id": "166dd47a-c6b5-4688-a7ce-ee6962ad4b53",
       "name": "1b. Parse Vapi Tool Call",
@@ -120,19 +120,7 @@
           "mode": "name"
         },
         "columns": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "Timestamp": "={{ $json.timestamp }}",
-            "CallDate": "={{ $json.callDate }}",
-            "CallerName": "={{ $json.args.callerName }}",
-            "CallerPhone": "={{ $json.args.callerPhone }}",
-            "Topic": "={{ $json.args.topic }}",
-            "Resolved": "={{ $json.args.resolved }}",
-            "Details": "={{ $json.args.details }}",
-            "GuestsCount": "={{ $json.args.guestsCount }}",
-            "Drift": "={{ $json.args.drift }}",
-            "CallConfidence": "={{ $json.args.callConfidence }}"
-          },
+          "mappingMode": "autoMapInputData",
           "matchingColumns": [],
           "schema": []
         },

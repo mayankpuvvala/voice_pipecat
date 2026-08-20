@@ -28,6 +28,30 @@ Env vars needed in `.env`:
   fresh one from the Sarvam dashboard.
 - `N8N_WEBHOOK_URL` — the same `restaurant-log-interaction` webhook URL the
   existing Vapi workflow already posts to.
+- `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` — for
+  `/admin` (see below). Reuses the same service account already granted
+  Editor on the sheet for n8n's own Sheets credential — no separate sharing
+  step needed.
+- `GOOGLE_SHEET_ID` — the spreadsheet ID from the sheet's URL (the string
+  between `/d/` and `/edit`).
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` — gate for `/admin`. Defaults to
+  `admin`/`admin` to match `ai-receptionist`'s local-dev precedent — **change
+  this** once deployed off localhost, since that default is not meant to
+  survive being on a public URL.
+
+## Admin
+
+`/admin` (HTTP Basic auth) shows every logged interaction — same columns as
+the sheet (`Timestamp`, `CallDate`, `CallerName`, `CallerPhone`, `Topic`,
+`Resolved`, `Details`, `GuestsCount`, `Drift`, `CallConfidence`), newest
+first. There's no local database in this project (unlike `ai-receptionist`),
+so this reads the Google Sheet live via the Sheets API on every request
+rather than a cached copy — see `app/admin/`.
+
+It's registered on Pipecat's own dev-runner FastAPI app (`pipecat.runner.run`
+exports `app` specifically so other modules can add routes before calling
+`main()` — see that module's docstring), so it's the same process and same
+URL as the voice agent itself, not a separate service.
 
 ## Run
 
