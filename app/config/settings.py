@@ -35,5 +35,11 @@ class Settings:
     admin_username: str = os.environ.get("ADMIN_USERNAME", "")
     admin_password: str = os.environ.get("ADMIN_PASSWORD", "")
 
+    # TURN relay for the webrtc transport once deployed off localhost — see
+    # app/pipeline/turn.py for why this needs a monkeypatch to actually reach
+    # pipecat's dev runner.
+    metered_api_key: str = os.environ.get("METERED_API_KEY", "")
+    metered_app_name: str = os.environ.get("METERED_APP_NAME", "")
+
 
 settings = Settings()

@@ -33,6 +33,7 @@ from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN
 from app.config.settings import settings
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
+from app.pipeline.turn import setup_turn
 from app.tools.log_interaction import log_interaction
 
 # pipecat.runner.run exports its FastAPI app specifically so other modules
@@ -41,6 +42,10 @@ from pipecat.runner.run import app as runner_app
 from pipecat.runner.run import main as run_dev_server
 
 register_admin_routes(runner_app)
+
+# Must run before run_dev_server()/main() — that's what actually constructs
+# SmallWebRTCRequestHandler, which this patches. See app/pipeline/turn.py.
+setup_turn(settings.metered_api_key, settings.metered_app_name)
 
 # Browser/WebRTC is the only caller-facing transport this phase — no
 # telephony yet. "eval" is dev/test-only, for pipecat.evals scripted testing
