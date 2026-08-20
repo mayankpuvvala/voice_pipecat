@@ -1,4 +1,4 @@
-pipecat-ai[openai,silero,webrtc,sarvam,runner]
+pipecat-ai[openai,silero,webrtc,sarvam,runner,daily]
 python-dotenv
 httpx
 loguru

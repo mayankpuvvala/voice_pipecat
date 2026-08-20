@@ -26,6 +26,7 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.evals.transport import EvalTransportParams
 from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.daily.transport import DailyParams
 from pipecat.workers.runner import WorkerRunner
 
 from app.admin.routes import register_admin_routes
@@ -42,11 +43,29 @@ from pipecat.runner.run import main as run_dev_server
 
 register_admin_routes(runner_app)
 
-# Browser/WebRTC is the only caller-facing transport this phase — no
+# Browser/WebRTC is the primary caller-facing transport this phase — no
 # telephony yet. "eval" is dev/test-only, for pipecat.evals scripted testing
 # (python -m pipecat.evals run ...), not a production call path.
+#
+# "daily" exists specifically to work around raw WebRTC (the "webrtc" entry,
+# aiortc-based) failing to establish a peer connection once deployed off
+# localhost: confirmed on Railway with "Timeout establishing the connection
+# to the remote peer" — real WebRTC media needs a TURN relay to cross NAT
+# between the browser and the server, Railway doesn't provide one, and
+# pipecat's dev runner has no hook to configure a custom TURN server for the
+# "webrtc" transport (SmallWebRTCRequestHandler's ice_servers is hardcoded to
+# None inside pipecat.runner.run, with no CLI/env override). Daily's SDK
+# handles TURN/NAT-traversal itself, so it works over Railway without any of
+# that — but needs a free Daily.co account (10,000 free minutes/month, no
+# card required as of writing) and DAILY_API_KEY set as an env var; the
+# runner creates the room/token automatically once that key is present. Use
+# this transport once that key exists; "webrtc" stays the localhost path.
 transport_params = {
     "webrtc": lambda: TransportParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+    ),
+    "daily": lambda: DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
     ),
