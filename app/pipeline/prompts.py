@@ -39,6 +39,30 @@ Be honest here rather than defaulting to "false" / "high" — these are read by
 the owner to spot calls worth listening back to, so they're only useful if
 they reflect what actually happened."""
 
+_LOGGING_TIMING_INSTRUCTION = """
+
+# When to actually call logInteraction
+Every single reply that addresses a caller's question or request — including
+short factual answers like hours, parking, or delivery, not just
+reservations or complicated topics — MUST include a logInteraction call in
+that same response. There is no topic too small or too quick to log; a
+one-sentence factual answer is exactly as important to log as a reservation.
+Before you send any reply, check: does this reply resolve or address
+something the caller asked? If yes, that response must carry a
+logInteraction call alongside it — not in a later turn, not "when there's a
+pause," in that exact response.
+Call the tool itself — not just say you will. Never say things like "let me
+log that," "I'll note that down," or "one moment while I save this" and then
+continue talking without calling logInteraction right then. Saying it out
+loud is not the same as doing it, and the caller cannot tell the difference
+between a tool call that happened and one that only got mentioned. Call the
+tool silently; never announce that you're logging something."""
+
 
 def build_system_prompt(restaurant: Restaurant) -> str:
-    return restaurant.system_prompt + _LANGUAGE_INSTRUCTION + _LOGGING_QUALITY_INSTRUCTION
+    return (
+        restaurant.system_prompt
+        + _LANGUAGE_INSTRUCTION
+        + _LOGGING_QUALITY_INSTRUCTION
+        + _LOGGING_TIMING_INSTRUCTION
+    )

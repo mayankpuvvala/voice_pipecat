@@ -31,6 +31,7 @@ from pipecat.workers.runner import WorkerRunner
 from app.admin.routes import register_admin_routes
 from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN
 from app.config.settings import settings
+from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
 from app.tools.log_interaction import log_interaction
 
@@ -89,12 +90,22 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
+    worker_handle = WorkerHandle()
+    logging_enforcer = LogInteractionEnforcer(context, worker_handle)
+
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
             user_aggregator,
             llm,
+            # Right after `llm`, not after assistant_aggregator: confirmed via
+            # testing that FunctionCallInProgressFrame/LLMFullResponseEndFrame
+            # don't reliably propagate past tts/assistant_aggregator (they get
+            # consumed for aggregation, not forwarded). This position sees
+            # them reliably — the enforcer captures the reply text itself
+            # instead of depending on assistant_aggregator's context timing.
+            logging_enforcer,
             tts,
             transport.output(),
             assistant_aggregator,
@@ -106,6 +117,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
     )
+    worker_handle.worker = worker
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)
