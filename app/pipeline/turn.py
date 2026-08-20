@@ -25,6 +25,20 @@ from loguru import logger
 from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequestHandler
 
 
+def _is_tcp_or_tls(urls: str) -> bool:
+    """Keep only turn(s): entries that ride over TCP/TLS, not plain UDP.
+
+    Confirmed via testing: the exact same code and credentials connect fine
+    locally but fail on Railway, which strongly points at Railway blocking
+    or not routing outbound UDP — a common container-platform restriction.
+    STUN and plain `turn:` (UDP) candidates would just hang there rather
+    than fail cleanly, so they're dropped rather than left in to fail slow.
+    `turns:` is TLS (always TCP-based); `turn:...?transport=tcp` is TURN
+    explicitly forced onto TCP.
+    """
+    return urls.startswith("turns:") or "transport=tcp" in urls
+
+
 def fetch_turn_credentials(api_key: str, app_name: str) -> list[RTCIceServer]:
     """Metered's TURN REST API — credentials are short-lived, fetched fresh
     on every process start rather than hardcoded."""
@@ -32,13 +46,21 @@ def fetch_turn_credentials(api_key: str, app_name: str) -> list[RTCIceServer]:
     response = httpx.get(url, params={"apiKey": api_key}, timeout=10.0)
     response.raise_for_status()
     servers = response.json()
+    filtered = [s for s in servers if _is_tcp_or_tls(s["urls"])]
+    logger.info(
+        "Metered returned {} ice server(s), keeping {} TCP/TLS-only "
+        "(dropping UDP/STUN entries that fail silently if outbound UDP is "
+        "blocked, as it appears to be on Railway)",
+        len(servers),
+        len(filtered),
+    )
     return [
         RTCIceServer(
             urls=s["urls"],
             username=s.get("username"),
             credential=s.get("credential"),
         )
-        for s in servers
+        for s in filtered
     ]
 
 
