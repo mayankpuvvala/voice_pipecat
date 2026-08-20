@@ -2,6 +2,37 @@
 
 Written for a cold read when you're back. Newest/most-important first.
 
+## Update — second pass ("test and fix everything")
+
+Went back through everything looking for more to fix. Two more things
+found and closed; two remain genuinely blocked on your action (both
+already covered below, unchanged) — I didn't touch either since I have no
+path to them without your credentials/signup.
+
+**Fixed: ai-receptionist had the same class of bug as restaurant-voice-agent's
+logInteraction issue, just in the summary instead of the tool call.**
+`agent.summarise()` only ever saw the spoken transcript, never whether a
+tool actually fired — so in the two reservation scenarios from earlier
+tonight where the caller hung up before `create_reservation` ran, the
+summary confidently reported the reservation as "confirmed" anyway, purely
+from the assistant's own confirmation-sounding language. Fixed in
+`ai-receptionist/backend/`: `CallSession` now tracks real tool-call events
+per call, and `agent.summarise()` takes that as a separate ground-truth
+input with an explicit instruction not to claim anything happened unless
+it's actually in that record. **Verified**: re-ran both scenarios that
+originally showed the bug — both now correctly say no reservation was
+made, instead of hallucinating success. Committed locally in that repo
+(`0da7f3e`) — **not pushed**, since push wasn't asked for there tonight and
+that repo already had an earlier local-only commit and unrelated
+pre-existing uncommitted changes (`config.py`/`stt.py`/`tts.py`) I left
+untouched rather than guess at.
+
+**Confirmed: Railway redeploy after the logInteraction fix stayed healthy**
+— `/` and `/admin` both still respond correctly post-deploy.
+
+The two items below (Daily transport, n8n live workflow) are unchanged —
+still genuinely blocked on your action, not something more digging fixes.
+
 ## Still open — needs your action
 
 1. **Daily transport for real cloud WebRTC connectivity** — branch
@@ -10,12 +41,25 @@ Written for a cold read when you're back. Newest/most-important first.
    signup (10,000 free min/month), `DAILY_API_KEY` set in Railway, and
    confirmation the Linux build actually succeeds — none of which I could
    do or verify myself.
-2. **n8n live workflow still needs the auto-map paste** — same manual step
-   flagged earlier tonight, still outstanding: replace `1b. Parse Vapi Tool
-   Call`'s code with the flattened version and switch `1c. Append
-   Interaction Row`'s Column Mapping to "Map Automatically." Local copy in
-   `n8n/restaurant_reception_workflow.json` already has this; the live n8n
-   editor doesn't yet.
+2. **n8n live workflow: half-applied, actively producing broken rows right
+   now.** Checked this directly via the Sheets API rather than guessing.
+   `1c. Append Interaction Row` DID get switched to "Map Automatically" at
+   some point, but `1b. Parse Vapi Tool Call`'s code was never replaced
+   with the flattened version — it's still emitting the old nested shape
+   (`{skip, toolCallId, args: {...}, timestamp, callDate, googleSheetId}`).
+   Auto-map dutifully created columns for those raw field names instead,
+   so the sheet now has 16 columns: the original 10 (Timestamp, CallDate,
+   ..., Drift, CallConfidence) sitting **completely empty** on every row,
+   plus `skip`/`toolCallId`/`args`/`timestamp`/`callDate`/`googleSheetId`
+   actually holding the data — with `args` containing the whole record
+   crammed into one cell as a raw JSON blob. Every real/test call logged
+   since the Sheets node was switched (at least 3 rows as of this check)
+   is in this broken shape. I can't fix this myself — I only have
+   *read-only* Sheets access (deliberately, principle of least privilege)
+   and no n8n API key, so both repairing the existing bad rows and
+   finishing the `1b.` code paste need your hands. Once `1b.` is fixed,
+   worth deleting the 16-column header row and the bad rows under it and
+   letting a fresh test call recreate a clean 10-column header.
 3. Once (1) is sorted: a real browser test call through the public Railway
    URL, to confirm this actually fixes the ICE timeout in practice, not
    just in theory.
