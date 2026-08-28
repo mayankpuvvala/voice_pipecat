@@ -23,4 +23,11 @@ EXPOSE 8080
 
 # Railway injects $PORT at runtime; --host 0.0.0.0 is required to be reachable
 # from outside the container (the runner's default, localhost, is not).
-CMD python -m app.main --host 0.0.0.0 --port ${PORT:-7860}
+# -t pins the runner to one telephony provider (registers the /ws route with
+# provider-appropriate startup banner/logging, and — for twilio/telnyx/plivo
+# only, not exotel — the XML webhook route those need). Driven by an env var,
+# not hardcoded: Exotel is the production target but needs TRAI lead time, so
+# TELEPHONY_TRANSPORT lets Railway switch to a free-trial/pay-as-you-go
+# provider (twilio/telnyx/plivo) for testing without a rebuild — set it in
+# Railway's service variables, default stays exotel.
+CMD python -m app.main --host 0.0.0.0 --port ${PORT:-7860} -t ${TELEPHONY_TRANSPORT:-exotel}

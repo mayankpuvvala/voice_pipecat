@@ -18,6 +18,15 @@ class Restaurant:
     first_message: str
     end_call_message: str
     system_prompt: str
+    timezone: str
+    # Kitchen operating hours, keyed by Python's date.weekday() (Monday=0 ..
+    # Sunday=6): each day maps to a list of (open, close) 24-hour "HH:MM"
+    # blocks, empty list meaning closed. This is what check_availability /
+    # book_table validate reservation times against — see app/pipeline/hours.py.
+    # Must be kept in sync by hand with the "Hours:" line in system_prompt
+    # below; only one restaurant is wired up right now, so a second source of
+    # truth here isn't worth abstracting away yet.
+    hours: dict[int, list[tuple[str, str]]]
 
 
 SPICE_ROUTE_KITCHEN = Restaurant(
@@ -26,6 +35,16 @@ SPICE_ROUTE_KITCHEN = Restaurant(
         "Thanks for calling Spice Route Kitchen, this is Meera — how can I help you today?"
     ),
     end_call_message="Thanks so much for calling Spice Route Kitchen — talk soon!",
+    timezone="Asia/Kolkata",
+    hours={
+        0: [],  # Monday: closed
+        1: [("12:00", "15:30"), ("19:00", "23:00")],
+        2: [("12:00", "15:30"), ("19:00", "23:00")],
+        3: [("12:00", "15:30"), ("19:00", "23:00")],
+        4: [("12:00", "15:30"), ("19:00", "23:00")],
+        5: [("12:00", "15:30"), ("19:00", "23:00")],
+        6: [("12:00", "15:30"), ("19:00", "23:00")],
+    },
     system_prompt="""You are Meera, a warm and efficient phone receptionist for Spice Route Kitchen, a restaurant in India. You answer every call directly — be a normal, friendly restaurant receptionist.
 
 === RESTAURANT FACTS (placeholder reference content — replace with the real client's details before this goes live; structure/categories below are the part that matters) ===

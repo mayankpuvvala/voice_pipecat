@@ -1,9 +1,14 @@
-"""Entrypoint. Run with `python app/main.py` (or `python app/main.py -t webrtc`).
+"""Entrypoint. Run with `python -m app.main -t <provider>` where <provider>
+is one of exotel/twilio/telnyx/plivo — see README.md / Dockerfile's
+TELEPHONY_TRANSPORT env var for how this is picked without editing code.
 
 The Pipecat dev runner (`pipecat.runner.run.main`) starts a local FastAPI
-server with a prebuilt browser test client at http://localhost:7860 — same
-role as Vapi's "Talk to Assistant" test call. No real phone number is wired
-up in this phase; see README.md for what "Phase 2" (Twilio/telephony) needs.
+server. Every supported provider connects over a plain WebSocket (`/ws`)
+speaking that provider's own media-streaming protocol — Exotel's is the
+production target (configured as the Voicebot Applet in Exotel's App
+Bazaar); the others exist so testing/dev can use a free-trial or
+pay-as-you-go number while Exotel/TRAI setup is still in progress. See
+README.md for the call path from Jio → Exotel → this server.
 """
 
 from __future__ import annotations
@@ -25,7 +30,8 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.evals.transport import EvalTransportParams
 from pipecat.services.sarvam.stt import SarvamSTTService
-from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.base_transport import BaseTransport
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
 
 from app.admin.routes import register_admin_routes
@@ -33,8 +39,8 @@ from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN
 from app.config.settings import settings
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
-from app.pipeline.turn import setup_turn
 from app.tools.log_interaction import log_interaction
+from app.tools.reservations import book_table, check_availability
 
 # pipecat.runner.run exports its FastAPI app specifically so other modules
 # can register routes before calling main() — see that module's docstring.
@@ -43,15 +49,30 @@ from pipecat.runner.run import main as run_dev_server
 
 register_admin_routes(runner_app)
 
-# Must run before run_dev_server()/main() — that's what actually constructs
-# SmallWebRTCRequestHandler, which this patches. See app/pipeline/turn.py.
-setup_turn(settings.metered_api_key, settings.metered_app_name)
-
-# Browser/WebRTC is the only caller-facing transport this phase — no
-# telephony yet. "eval" is dev/test-only, for pipecat.evals scripted testing
-# (python -m pipecat.evals run ...), not a production call path.
+# Telephony only — no Daily/WebRTC. All four providers share the identical
+# FastAPIWebsocketParams shape; create_transport() auto-detects which one
+# actually connected from the WebSocket handshake and fills in the matching
+# serializer (streamSid/callSid, sample-rate resampling, add_wav_header)
+# automatically. Exotel is the target for production, but Exotel needs TRAI
+# verification lead time — twilio/telnyx/plivo are registered too so a free
+# trial or pay-as-you-go number can stand in for testing/dev without any code
+# change, just TELEPHONY_TRANSPORT (see Settings/Dockerfile). "eval" is
+# dev/test-only, for pipecat.evals scripted testing (python -m pipecat.evals
+# run ...), not a production call path.
 transport_params = {
-    "webrtc": lambda: TransportParams(
+    "exotel": lambda: FastAPIWebsocketParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+    ),
+    "twilio": lambda: FastAPIWebsocketParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+    ),
+    "telnyx": lambda: FastAPIWebsocketParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+    ),
+    "plivo": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
     ),
@@ -89,7 +110,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         voice=settings.openai_tts_voice,
     )
 
-    context = LLMContext(tools=[log_interaction])
+    context = LLMContext(tools=[log_interaction, check_availability, book_table])
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
@@ -129,7 +150,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        logger.info("Test caller connected")
+        logger.info("Caller connected")
         # Spoken directly via TTS, bypassing the LLM entirely. The previous
         # version added a "greet the caller now" developer message to context
         # and triggered an LLMRunFrame — but if the caller's mic picked up
@@ -144,7 +165,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info("Test caller disconnected")
+        logger.info("Caller disconnected")
         await runner.cancel()
 
     await runner.run()

@@ -1,21 +1,29 @@
-"""The `logInteraction` tool: logs each resolved/unresolved call topic by
-POSTing to the same n8n webhook the existing Vapi bot already uses.
+"""The `logInteraction` tool: logs each resolved/unresolved call topic
+directly to the same Google Sheet tab n8n used to write to.
 
-n8n's `1b. Parse Vapi Tool Call` node expects a Vapi-shaped envelope
-(`message.toolCalls[0].function.arguments`). Rather than touching that
-workflow, this builds the same envelope so `restaurant_reception_workflow.json`
-needs zero edits — see n8n/restaurant_reception_workflow.json in this repo.
+Moved off the n8n webhook it originally POSTed to: that webhook ran live, in
+the middle of a call, and Railway's free-tier n8n can cold-start — dead air
+on a real call. This writes straight to Sheets from this same process
+instead (see app.services.sheets_client), no extra hop. n8n's remaining jobs
+are non-time-critical and read this sheet after the fact (end-of-day digest,
+escalation alert) — see n8n/restaurant_reception_workflow.json; its
+`1a`-`1f` live-webhook branch is dead now and should be removed next time
+that workflow is touched.
 """
 
 from __future__ import annotations
 
-import uuid
+import asyncio
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-import httpx
 from loguru import logger
 from pipecat.services.llm_service import FunctionCallParams
 
-from app.config.settings import settings
+from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN as RESTAURANT
+from app.services import sheets_client
+
+_INTERACTIONS_SHEET = "Sheet1"
 
 
 async def log_interaction(
@@ -55,40 +63,25 @@ async def log_interaction(
             right, "low" if you're genuinely unsure you understood them correctly or the
             caller seemed unsatisfied/confused by your response.
     """
-    envelope = {
-        "message": {
-            "toolCalls": [
-                {
-                    "id": f"call_{uuid.uuid4().hex[:24]}",
-                    "function": {
-                        "name": "logInteraction",
-                        "arguments": {
-                            "callerName": caller_name,
-                            "callerPhone": caller_phone,
-                            "topic": topic,
-                            "resolved": resolved,
-                            "details": details,
-                            "guestsCount": guests_count,
-                            "drift": drift,
-                            "callConfidence": call_confidence,
-                        },
-                    },
-                }
-            ]
-        }
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(ZoneInfo(RESTAURANT.timezone))
+    row = {
+        "Timestamp": now_utc.isoformat(),
+        "CallDate": now_local.date().isoformat(),
+        "CallerName": caller_name,
+        "CallerPhone": caller_phone,
+        "Topic": topic,
+        "Resolved": resolved,
+        "Details": details,
+        "GuestsCount": guests_count,
+        "Drift": drift,
+        "CallConfidence": call_confidence,
     }
 
-    if not settings.n8n_webhook_url:
-        logger.warning("N8N_WEBHOOK_URL not set — would have logged: {}", envelope)
-        await params.result_callback({"logged": False, "reason": "no webhook configured"})
-        return
-
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(settings.n8n_webhook_url, json=envelope)
-            response.raise_for_status()
+        await asyncio.to_thread(sheets_client.append_row, _INTERACTIONS_SHEET, row)
     except Exception:
-        logger.exception("Failed to log interaction to n8n")
+        logger.exception("Failed to log interaction to Sheets")
         await params.result_callback({"logged": False})
         return
 

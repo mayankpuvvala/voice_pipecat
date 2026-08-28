@@ -1,6 +1,6 @@
-pipecat-ai[openai,silero,webrtc,sarvam,runner]
+pipecat-ai[openai,silero,websocket,sarvam,runner]
 python-dotenv
-httpx
 loguru
 google-api-python-client
 google-auth
+tzdata
