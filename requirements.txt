@@ -4,4 +4,6 @@ httpx
 loguru
 google-api-python-client
 google-auth
+google-auth-oauthlib
 tzdata
+boto3

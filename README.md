@@ -199,10 +199,17 @@ directly — see `Dockerfile`.
   is decided.
 - **No missed-call → outbound-callback detection**, and outbound calling
   shouldn't be enabled at all until TRAI DLT registration is complete.
-- **No call recording, transcript persistence, or outcome database.**
-  `logInteraction` logs a short topic summary, not a verbatim transcript or
-  audio; there's no recording storage and no FAQ/booking/order/escalation/
-  missed outcome taxonomy yet.
+- **No transcript persistence or outcome database.** `logInteraction` logs a
+  short topic summary, not a verbatim transcript, and there's no FAQ/
+  booking/order/escalation/missed outcome taxonomy yet. Full-call audio
+  recording is built and live (`app/pipeline/recording.py`), landing in a
+  "Call Recordings" folder in Drive via `app/services/drive_oauth_client.py`
+  — OAuth as an actual Google account, not the service account (which has
+  had zero Drive storage quota since 2021, confirmed live via
+  `storageQuotaExceeded` on an actual upload attempt). `app/services/r2_client.py`
+  (Cloudflare R2) is the intended longer-term backend once R2 is actually
+  activated on the Cloudflare account — see `GOOGLE_OAUTH_*` / `R2_*` in
+  `.env.example` for both setups.
 - **No phone-order-taking flow.** The prompt/tools only handle reservations;
   `book_table`/`Bookings` don't cover takeout/delivery orders.
 
