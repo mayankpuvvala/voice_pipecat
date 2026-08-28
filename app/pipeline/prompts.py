@@ -3,7 +3,11 @@
 This is the restaurant's ported Vapi prompt plus the real additions this port
 needs on top of it: a language instruction (Vapi pinned its transcriber to
 English; this pipeline's Sarvam STT doesn't, so the model needs telling to
-actually respond in kind), the current date/time (needed to resolve relative
+actually respond in kind), a brevity instruction (a live test call came back
+sounding like a form being read aloud — multiple questions stacked into one
+turn, unsolicited extra detail — so this is called out explicitly and given
+its own block rather than left as one easily-outweighed bullet buried in the
+base prompt's rules list), the current date/time (needed to resolve relative
 dates like "tomorrow" into an exact date for the reservation tools), a hard
 gate on confirming a reservation without calling those tools, and guidance on
 the two logInteraction fields (`drift`, `callConfidence`) that don't exist in
@@ -26,6 +30,26 @@ languages mid-conversation, switch with them. Text-to-speech for this
 prototype phase is an English voice only, so replies will be read aloud with
 an English accent regardless of language — that's a known limitation of this
 phase, not something to compensate for in what you actually say."""
+
+_BREVITY_INSTRUCTION = """
+
+# Keep it brief — this is a phone call, not a form
+Every reply should sound like a real front-desk phone call: short sentences,
+as few words as the moment actually needs, one idea per turn.
+- Ask ONE question at a time. Never stack multiple asks into one sentence
+  (e.g. asking for name and guest count and time all at once) — ask, hear
+  the answer, ask the next thing. This applies everywhere, not just
+  reservations.
+- Don't restate or summarize what the caller just said back to them unless
+  you're confirming a specific detail (like a finished reservation).
+- Don't narrate what you're doing ("Let me check that for you," "I'll go
+  ahead and note that down," "Give me one second") — just do it and give the
+  outcome.
+- Answer only what was asked. Don't volunteer extra menu items, hours, or
+  facts nobody asked about.
+- If a short answer fully covers it, stop there. Don't pad with extra
+  pleasantries or detail just to sound thorough."""
+
 
 def _current_time_instruction(restaurant: Restaurant) -> str:
     now = datetime.now(ZoneInfo(restaurant.timezone))
@@ -104,6 +128,7 @@ def build_system_prompt(restaurant: Restaurant) -> str:
     return (
         restaurant.system_prompt
         + _LANGUAGE_INSTRUCTION
+        + _BREVITY_INSTRUCTION
         + _current_time_instruction(restaurant)
         + _RESERVATION_TOOL_INSTRUCTION
         + _LOGGING_QUALITY_INSTRUCTION

@@ -70,16 +70,6 @@ async def root_status() -> dict:
 
 register_admin_routes(runner_app)
 
-# Telephony only — no Daily/WebRTC. All four providers share the identical
-# FastAPIWebsocketParams shape; create_transport() auto-detects which one
-# actually connected from the WebSocket handshake and fills in the matching
-# serializer (streamSid/callSid, sample-rate resampling, add_wav_header)
-# automatically. Exotel is the target for production, but Exotel needs TRAI
-# verification lead time — twilio/telnyx/plivo are registered too so a free
-# trial or pay-as-you-go number can stand in for testing/dev without any code
-# change, just TELEPHONY_TRANSPORT (see Settings/Dockerfile). "eval" is
-# dev/test-only, for pipecat.evals scripted testing (python -m pipecat.evals
-# run ...), not a production call path.
 transport_params = {
     "exotel": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
