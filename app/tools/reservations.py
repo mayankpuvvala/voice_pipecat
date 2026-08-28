@@ -97,9 +97,14 @@ async def book_table(
         await params.result_callback({"booked": False, "reason": reason})
         return
 
+    app_resources = params.app_resources or {}
+    # Caller ID from the telephony provider — only fills in when the caller
+    # didn't give a callback number themselves; never overrides it.
+    caller_phone = caller_phone or app_resources.get("caller_phone", "")
     row = {
         "Timestamp": datetime.now(timezone.utc).isoformat(),
         "BookingId": uuid.uuid4().hex[:12],
+        "CallSessionId": app_resources.get("call_session_id", ""),
         "Date": date,
         "Time": time,
         "GuestsCount": guests_count,

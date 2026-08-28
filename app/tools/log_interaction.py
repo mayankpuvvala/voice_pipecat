@@ -65,9 +65,16 @@ async def log_interaction(
     """
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc.astimezone(ZoneInfo(RESTAURANT.timezone))
+    app_resources = params.app_resources or {}
+    call_session_id = app_resources.get("call_session_id", "")
+    # Caller ID from the telephony provider (see app/services/twilio_client.py
+    # and run_bot()) — only used when the caller didn't give a number
+    # themselves; never overrides what they actually said.
+    caller_phone = caller_phone or app_resources.get("caller_phone", "")
     row = {
         "Timestamp": now_utc.isoformat(),
         "CallDate": now_local.date().isoformat(),
+        "CallSessionId": call_session_id,
         "CallerName": caller_name,
         "CallerPhone": caller_phone,
         "Topic": topic,

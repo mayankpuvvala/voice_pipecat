@@ -14,22 +14,22 @@ load_dotenv(override=True)
 class Settings:
     openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
     openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    # Matches the voice already picked for the Vapi assistant (voice.voiceId).
     openai_tts_voice: str = os.environ.get("OPENAI_TTS_VOICE", "shimmer")
 
     sarvam_api_key: str = os.environ.get("SARVAM_API_KEY", "")
+    twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")
 
-    # Live-call tools (logInteraction, check_availability, book_table) and
-    # /admin all read/write the sheet directly — same service account n8n's
-    # own Sheets credential already uses (it's already been granted Editor on
-    # the sheet, so no separate sharing step needed).
     google_service_account_email: str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_EMAIL", "")
     google_service_account_private_key: str = os.environ.get(
         "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY", ""
     )
     google_sheet_id: str = os.environ.get("GOOGLE_SHEET_ID", "")
 
-    # Required once this is reachable off localhost — see auth.py.
+    google_drive_recordings_folder_id: str = os.environ.get(
+        "GOOGLE_DRIVE_RECORDINGS_FOLDER_ID", ""
+    )
+
     admin_username: str = os.environ.get("ADMIN_USERNAME", "")
     admin_password: str = os.environ.get("ADMIN_PASSWORD", "")
 

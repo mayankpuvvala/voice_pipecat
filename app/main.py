@@ -20,6 +20,7 @@ from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
@@ -39,6 +40,8 @@ from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN
 from app.config.settings import settings
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
+from app.pipeline.recording import save_call_recording
+from app.services.twilio_client import lookup_caller_number
 from app.tools.log_interaction import log_interaction
 from app.tools.reservations import book_table, check_availability
 
@@ -97,6 +100,14 @@ transport_params = {
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     logger.info("Starting bot for {}", SPICE_ROUTE_KITCHEN.name)
 
+    call_session_id = getattr(runner_args, "session_id", None) or ""
+    call_data = getattr(runner_args, "call_data", None)
+    caller_phone = getattr(call_data, "from_number", None) or ""
+    # Exotel's handshake carries the real caller number directly; Twilio's
+    # doesn't (only the CallSid), so fall back to a REST lookup there.
+    if not caller_phone and getattr(runner_args, "transport_type", None) == "twilio" and call_data:
+        caller_phone = await lookup_caller_number(getattr(call_data, "call_id", "") or "")
+
     # No `language` pinned on SarvamSTTService.Settings — auto-detects across
     # the caller's code-switched Hindi/Telugu/English per utterance.
     stt = SarvamSTTService(
@@ -130,6 +141,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     worker_handle = WorkerHandle()
     logging_enforcer = LogInteractionEnforcer(context, worker_handle)
 
+    # Positioned after `tts`, not after `transport.output()`: the output
+    # transport is a sink for OutputAudioRawFrame (it writes audio out and
+    # does not forward the frame further), so a processor placed after it
+    # would never see any bot audio. InputAudioRawFrame frames, by contrast,
+    # are passed through by every earlier stage (SarvamSTTService defaults
+    # audio_passthrough=True), so this one position sees both directions.
+    audiobuffer = AudioBufferProcessor(auto_start_recording=True)
+
     pipeline = Pipeline(
         [
             transport.input(),
@@ -144,15 +163,21 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # instead of depending on assistant_aggregator's context timing.
             logging_enforcer,
             tts,
+            audiobuffer,
             transport.output(),
             assistant_aggregator,
         ]
     )
 
+    @audiobuffer.event_handler("on_audio_data")
+    async def on_audio_data(buffer, audio, sample_rate, num_channels):
+        await save_call_recording(call_session_id, caller_phone, audio, sample_rate, num_channels)
+
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        app_resources={"call_session_id": call_session_id, "caller_phone": caller_phone},
     )
     worker_handle.worker = worker
 
