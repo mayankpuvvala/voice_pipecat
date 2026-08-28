@@ -44,8 +44,29 @@ from app.tools.reservations import book_table, check_availability
 
 # pipecat.runner.run exports its FastAPI app specifically so other modules
 # can register routes before calling main() — see that module's docstring.
+import pipecat.runner.run as pipecat_runner
 from pipecat.runner.run import app as runner_app
 from pipecat.runner.run import main as run_dev_server
+
+# Pipecat's dev runner always mounts its prebuilt browser widget at / and
+# /client, regardless of -t — there's no config flag to turn it off. Left
+# alone, that means the deployed URL shows a "Connect" button that always
+# fails now ("Transport 'webrtc' is not allowed. Server is configured for
+# 'exotel' only"), which reads as broken rather than as the intended
+# telephony-only setup. No-op the internal setup function before main() runs
+# (same monkeypatch approach this file previously used for WebRTC's TURN
+# config) and give / a plain status response instead.
+pipecat_runner._setup_frontend_routes = lambda app: None
+
+
+@runner_app.get("/", include_in_schema=False)
+async def root_status() -> dict:
+    return {
+        "status": "ok",
+        "service": f"{SPICE_ROUTE_KITCHEN.name} voice agent",
+        "note": "Telephony only, no browser test client — see /admin for call logs.",
+    }
+
 
 register_admin_routes(runner_app)
 
