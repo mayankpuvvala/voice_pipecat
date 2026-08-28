@@ -13,4 +13,4 @@ COPY app/ app/
 
 EXPOSE 8080
 
-CMD python -m app.main --host 0.0.0.0 --port ${PORT:-7860} -t ${TELEPHONY_TRANSPORT:-exotel} --proxy "${PUBLIC_PROXY_HOST:-$RAILWAY_PUBLIC_DOMAIN}"
+CMD python -m app.main --host 0.0.0.0 --port ${PORT:-7860} -t ${TELEPHONY_TRANSPORT:-twilio} --proxy "${PUBLIC_PROXY_HOST:-$RAILWAY_PUBLIC_DOMAIN}"
