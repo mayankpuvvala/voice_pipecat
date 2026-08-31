@@ -67,10 +67,6 @@ class LogInteractionEnforcer(FrameProcessor):
         self._worker_handle = worker_handle
         self._tool_call_seen = False
         self._reply_text_parts: list[str] = []
-        # True while waiting for the response to our OWN nudge — without this,
-        # a model that correctly stays silent in response to the nudge would
-        # itself produce an LLMFullResponseEndFrame with no tool call, which
-        # would trigger another nudge, forever.
         self._awaiting_followup = False
 
     async def process_frame(self, frame, direction: FrameDirection) -> None:
@@ -78,6 +74,20 @@ class LogInteractionEnforcer(FrameProcessor):
 
         if isinstance(frame, LLMTextFrame):
             self._reply_text_parts.append(frame.text)
+            if self._awaiting_followup:
+                # This text is from the nudge's own follow-up generation,
+                # which is meant to be a silent tool call, never spoken —
+                # the model doesn't reliably honor "stay silent" as plain
+                # wording (that unreliability is the whole reason this
+                # enforcer exists instead of a prompt-only instruction), so
+                # swallow it structurally rather than trust compliance.
+                # Confirmed live: a turn needing multiple tool calls (e.g. a
+                # full reservation — check_availability, book_table,
+                # logInteraction, each its own round-trip) was getting its
+                # own confirmation spoken 2-3x, once per extra nudge cycle,
+                # before this — the more tool calls a turn needed, the more
+                # times it repeated.
+                return
         elif isinstance(frame, FunctionCallInProgressFrame):
             self._tool_call_seen = True
         elif isinstance(frame, LLMFullResponseEndFrame):
