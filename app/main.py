@@ -41,24 +41,16 @@ from app.config.settings import settings
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
 from app.pipeline.recording import save_call_recording
+from app.pipeline.transcript import build_transcript
 from app.services.twilio_client import lookup_caller_number
 from app.tools.log_interaction import log_interaction
 from app.tools.reservations import book_table, check_availability
 
-# pipecat.runner.run exports its FastAPI app specifically so other modules
-# can register routes before calling main() — see that module's docstring.
+# pipecat.runnroutes before calling main() — see that module's docstring.
 import pipecat.runner.run as pipecat_runner
 from pipecat.runner.run import app as runner_app
 from pipecat.runner.run import main as run_dev_server
 
-# Pipecat's dev runner always mounts its prebuilt browser widget at / and
-# /client, regardless of -t — there's no config flag to turn it off. Left
-# alone, that means the deployed URL shows a "Connect" button that always
-# fails now ("Transport 'webrtc' is not allowed. Server is configured for
-# 'exotel' only"), which reads as broken rather than as the intended
-# telephony-only setup. No-op the internal setup function before main() runs
-# (same monkeypatch approach this file previously used for WebRTC's TURN
-# config) and give / a plain status response instead.
 pipecat_runner._setup_frontend_routes = lambda app: None
 
 
@@ -103,13 +95,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     call_session_id = getattr(runner_args, "session_id", None) or ""
     call_data = getattr(runner_args, "call_data", None)
     caller_phone = getattr(call_data, "from_number", None) or ""
-    # Exotel's handshake carries the real caller number directly; Twilio's
-    # doesn't (only the CallSid), so fall back to a REST lookup there.
     if not caller_phone and getattr(runner_args, "transport_type", None) == "twilio" and call_data:
         caller_phone = await lookup_caller_number(getattr(call_data, "call_id", "") or "")
 
-    # No `language` pinned on SarvamSTTService.Settings — auto-detects across
-    # the caller's code-switched Hindi/Telugu/English per utterance.
     stt = SarvamSTTService(
         api_key=settings.sarvam_api_key,
         settings=SarvamSTTService.Settings(model="saaras:v3"),
@@ -123,10 +111,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
-    # OpenAI TTS regardless of detected caller language for this phase — no
-    # Hindi/Telugu voice yet. Revisit once language-matched voices are
-    # evaluated (Sarvam TTS is the likely candidate, since Sarvam already
-    # handles STT here).
     tts = OpenAITTSService(
         api_key=settings.openai_api_key,
         voice=settings.openai_tts_voice,
@@ -141,13 +125,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     worker_handle = WorkerHandle()
     logging_enforcer = LogInteractionEnforcer(context, worker_handle)
 
-    # Positioned after `tts`, not after `transport.output()`: the output
-    # transport is a sink for OutputAudioRawFrame (it writes audio out and
-    # does not forward the frame further), so a processor placed after it
-    # would never see any bot audio. InputAudioRawFrame frames, by contrast,
-    # are passed through by every earlier stage (SarvamSTTService defaults
-    # audio_passthrough=True), so this one position sees both directions.
     audiobuffer = AudioBufferProcessor(auto_start_recording=True)
+    call_state = {"transcript": ""}
 
     pipeline = Pipeline(
         [
@@ -155,12 +134,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             stt,
             user_aggregator,
             llm,
-            # Right after `llm`, not after assistant_aggregator: confirmed via
-            # testing that FunctionCallInProgressFrame/LLMFullResponseEndFrame
-            # don't reliably propagate past tts/assistant_aggregator (they get
-            # consumed for aggregation, not forwarded). This position sees
-            # them reliably — the enforcer captures the reply text itself
-            # instead of depending on assistant_aggregator's context timing.
             logging_enforcer,
             tts,
             audiobuffer,
@@ -171,7 +144,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     @audiobuffer.event_handler("on_audio_data")
     async def on_audio_data(buffer, audio, sample_rate, num_channels):
-        await save_call_recording(call_session_id, caller_phone, audio, sample_rate, num_channels)
+        await save_call_recording(
+            call_session_id,
+            caller_phone,
+            audio,
+            sample_rate,
+            num_channels,
+            transcript=call_state["transcript"],
+        )
 
     worker = PipelineWorker(
         pipeline,
@@ -187,21 +167,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Caller connected")
-        # Spoken directly via TTS, bypassing the LLM entirely. The previous
-        # version added a "greet the caller now" developer message to context
-        # and triggered an LLMRunFrame — but if the caller's mic picked up
-        # anything before that reply finished and landed in context as an
-        # assistant turn, the interruption cancelled it mid-flight, and the
-        # *next* generation still carried the same standing instruction and
-        # repeated the greeting again instead of responding to what was
-        # actually said. That's exactly what happened in testing: three
-        # near-identical greetings back to back. A one-shot TTSSpeakFrame has
-        # no retry path to repeat, since nothing persists in context.
         await worker.queue_frames([TTSSpeakFrame(SPICE_ROUTE_KITCHEN.first_message)])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info("Caller disconnected")
+        call_state["transcript"] = build_transcript(context)
         await runner.cancel()
 
     await runner.run()

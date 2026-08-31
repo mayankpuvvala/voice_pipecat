@@ -22,13 +22,6 @@ class Restaurant:
     end_call_message: str
     system_prompt: str
     timezone: str
-    # Kitchen operating hours, keyed by Python's date.weekday() (Monday=0 ..
-    # Sunday=6): each day maps to a list of (open, close) 24-hour "HH:MM"
-    # blocks, empty list meaning closed. This is what check_availability /
-    # book_table validate reservation times against — see app/pipeline/hours.py.
-    # Must be kept in sync by hand with the "Hours:" line in system_prompt
-    # below; only one restaurant is wired up right now, so a second source of
-    # truth here isn't worth abstracting away yet.
     hours: dict[int, list[tuple[str, str]]]
 
 
