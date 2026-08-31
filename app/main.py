@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from loguru import logger
 
-from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -70,22 +69,18 @@ transport_params = {
     "exotel": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        audio_in_filter=RNNoiseFilter(),
     ),
     "twilio": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        audio_in_filter=RNNoiseFilter(),
     ),
     "telnyx": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        audio_in_filter=RNNoiseFilter(),
     ),
     "plivo": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        audio_in_filter=RNNoiseFilter(),
     ),
     "eval": lambda: EvalTransportParams(
         audio_in_enabled=True,
