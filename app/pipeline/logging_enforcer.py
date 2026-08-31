@@ -95,7 +95,19 @@ class LogInteractionEnforcer(FrameProcessor):
             self._reply_text_parts = []
 
             if self._awaiting_followup:
-                self._awaiting_followup = False
+                if not self._tool_call_seen:
+                    # A followup round that called a tool (e.g. logInteraction)
+                    # isn't actually done — pipecat's own LLMAssistantAggregator
+                    # automatically runs another round right after any function
+                    # result (see _maybe_push_context_after_function_result),
+                    # independent of this enforcer. That next round is still
+                    # part of this same silent logging exchange, not a new
+                    # reply to the caller, so keep swallowing until a round
+                    # finally finishes with nothing left to call. Confirmed
+                    # live: clearing this unconditionally let that automatic
+                    # continuation's text slip past the swallow and get
+                    # spoken, sounding like the bot repeating itself.
+                    self._awaiting_followup = False
             elif not self._tool_call_seen:
                 logger.debug("LogInteractionEnforcer: no tool call this turn, nudging")
                 self._context.add_message(

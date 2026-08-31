@@ -14,6 +14,7 @@ README.md for the call path from Jio → Exotel → this server.
 from __future__ import annotations
 
 import os
+import sys
 
 from loguru import logger
 
@@ -45,6 +46,7 @@ from app.pipeline.prompts import build_system_prompt
 from app.pipeline.recording import save_call_recording
 from app.pipeline.transcript import build_transcript
 from app.services.twilio_client import lookup_caller_number
+from app.tools.end_call import end_call
 from app.tools.log_interaction import log_interaction
 from app.tools.reservations import book_table, check_availability
 
@@ -70,6 +72,18 @@ async def root_status() -> dict:
 
 
 register_admin_routes(runner_app)
+
+
+@runner_app.on_event("startup")
+async def _reduce_log_verbosity() -> None:
+    # pipecat's dev runner (run_dev_server, called below) hardcodes its own
+    # DEBUG-level sink during arg parsing — this replaces it once the app is
+    # actually up, so Railway's logs aren't flooded with per-frame TTFB/TTS
+    # debug lines on every call. Our own logger.info/.exception calls stay
+    # visible either way.
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
+
 
 transport_params = {
     "exotel": lambda: FastAPIWebsocketParams(
@@ -122,7 +136,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         voice=settings.openai_tts_voice,
     )
 
-    context = LLMContext(tools=[log_interaction, check_availability, book_table])
+    context = LLMContext(tools=[log_interaction, check_availability, book_table, end_call])
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
@@ -133,6 +147,16 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     audiobuffer = AudioBufferProcessor(auto_start_recording=True)
     call_state = {"transcript": ""}
+
+    def capture_transcript() -> None:
+        # Shared by caller-hangup (on_client_disconnected, below) and a
+        # bot-initiated hangup (the end_call tool): the websocket transport
+        # only fires on_client_disconnected when the *caller* closes the
+        # connection (see FastAPIWebsocketClient._receive_messages' `if not
+        # self._client.is_closing` guard) — it does NOT fire when we close
+        # it ourselves via EndWorkerFrame. Without this, a call the bot ends
+        # itself would save a recording with no transcript.
+        call_state["transcript"] = build_transcript(context)
 
     pipeline = Pipeline(
         [
@@ -163,7 +187,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        app_resources={"call_session_id": call_session_id, "caller_phone": caller_phone},
+        app_resources={
+            "call_session_id": call_session_id,
+            "caller_phone": caller_phone,
+            "worker_handle": worker_handle,
+            "capture_transcript": capture_transcript,
+        },
     )
     worker_handle.worker = worker
 
@@ -178,7 +207,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info("Caller disconnected")
-        call_state["transcript"] = build_transcript(context)
+        capture_transcript()
         await runner.cancel()
 
     await runner.run()

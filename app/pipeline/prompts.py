@@ -124,6 +124,17 @@ between a tool call that happened and one that only got mentioned. Call the
 tool silently; never announce that you're logging something."""
 
 
+_END_CALL_INSTRUCTION = """
+
+# Ending the call
+When the caller indicates they're done (says bye, thanks, that's all, etc.),
+say your own goodbye AND call end_call in that same response — don't just
+say goodbye and wait, actually end the call. Never call end_call before your
+goodbye has been spoken, and never call it while the caller might still need
+something (mid-conversation silence, thinking, or an unanswered question is
+not the caller being done)."""
+
+
 def build_system_prompt(restaurant: Restaurant) -> str:
     return (
         restaurant.system_prompt
@@ -133,4 +144,5 @@ def build_system_prompt(restaurant: Restaurant) -> str:
         + _RESERVATION_TOOL_INSTRUCTION
         + _LOGGING_QUALITY_INSTRUCTION
         + _LOGGING_TIMING_INSTRUCTION
+        + _END_CALL_INSTRUCTION
     )
