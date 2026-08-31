@@ -13,6 +13,8 @@ README.md for the call path from Jio → Exotel → this server.
 
 from __future__ import annotations
 
+import os
+
 from loguru import logger
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -60,6 +62,10 @@ async def root_status() -> dict:
         "status": "ok",
         "service": f"{SPICE_ROUTE_KITCHEN.name} voice agent",
         "note": "Telephony only, no browser test client — see /admin for call logs.",
+        # Railway injects this at runtime; lets us confirm which commit is
+        # actually live without dashboard access (see RAILWAY_GIT_COMMIT_SHA
+        # in Railway's docs).
+        "git_commit": os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown"),
     }
 
 
