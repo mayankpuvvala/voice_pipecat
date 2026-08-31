@@ -14,6 +14,7 @@ that workflow is touched.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -24,6 +25,17 @@ from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN as RE
 from app.services import sheets_client
 
 _INTERACTIONS_SHEET = "Sheet1"
+
+# Live calls have shown the model re-calling this tool 2-3x in quick
+# succession for what's really one moment (e.g. a reservation confirmation
+# logged three times, ~1s apart, with near-identical reworded details) —
+# separate from LogInteractionEnforcer's nudge, which is already bounded to
+# one extra round; this is the model itself second-guessing whether it
+# already logged something. In-process cache, not a Sheets read, so it adds
+# no latency to a live call: one process handles a call's full duration, so
+# this doesn't need to survive restarts or be shared across processes.
+_DEDUPE_WINDOW_SECS = 10.0
+_recent_topics: dict[str, tuple[str, float]] = {}
 
 
 async def log_interaction(
@@ -71,6 +83,21 @@ async def log_interaction(
     # and run_bot()) — only used when the caller didn't give a number
     # themselves; never overrides what they actually said.
     caller_phone = caller_phone or app_resources.get("caller_phone", "")
+
+    if call_session_id:
+        now_mono = time.monotonic()
+        last = _recent_topics.get(call_session_id)
+        if last and last[0] == topic and (now_mono - last[1]) < _DEDUPE_WINDOW_SECS:
+            logger.debug(
+                "Skipping duplicate logInteraction for topic '{}' on call {} ({}s after the last one)",
+                topic,
+                call_session_id,
+                round(now_mono - last[1], 1),
+            )
+            await params.result_callback({"logged": True})
+            return
+        _recent_topics[call_session_id] = (topic, now_mono)
+
     row = {
         "Timestamp": now_utc.isoformat(),
         "CallDate": now_local.date().isoformat(),
