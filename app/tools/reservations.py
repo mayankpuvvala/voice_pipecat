@@ -89,9 +89,17 @@ async def book_table(
         date: The reservation date as YYYY-MM-DD.
         time: The reservation time as 24-hour HH:MM.
         guests_count: Number of guests, as a string, e.g. "5".
-        caller_name: The name to hold the table under.
+        caller_name: The name to hold the table under. Required — ask the caller
+            for their name if they haven't given one; never pass a blank or
+            placeholder value just to get the call through.
         caller_phone: Caller's callback number if given, otherwise empty string.
     """
+    if not caller_name.strip():
+        await params.result_callback(
+            {"booked": False, "reason": "caller name is required — ask for it before booking"}
+        )
+        return
+
     ok, reason = is_within_hours(RESTAURANT, date, time)
     if not ok:
         await params.result_callback({"booked": False, "reason": reason})

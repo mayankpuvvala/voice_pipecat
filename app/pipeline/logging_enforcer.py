@@ -1,5 +1,8 @@
 """Forces a logInteraction check after any assistant turn that ends without
-calling any tool.
+calling any tool, and swallows the spoken text of any round that pipecat's
+own function-calling machinery auto-generates afterward — whether that
+round was triggered by this enforcer's own nudge or by a normal, fully
+compliant reply+tool-call turn.
 
 Prompt-only instructions ("call logInteraction in the same turn") reliably
 worked for reservation-style replies but not for short factual answers,
@@ -7,6 +10,19 @@ confirmed via isolated eval-transport testing: the model would narrate "I'll
 log that" and then simply not call the tool for a plain hours/parking
 question, even after the instruction was made explicit and absolute. This
 closes the gap structurally instead of with more prompt wording.
+
+Separately: pipecat's LLMAssistantAggregator automatically re-runs the LLM
+after ANY function call completes (standard tool-calling continuation, so
+the model can react to the tool's result) — this happens unconditionally,
+regardless of whether this enforcer had anything to do with the tool call.
+When a round already spoke its full reply in the same turn as the tool call
+(the normal, compliant case), that automatic continuation has nothing
+legitimate left to add, but nothing was stopping it from generating and
+speaking a paraphrased restatement anyway. Confirmed live from a real call:
+a reply+logInteraction turn and a reply+book_table+logInteraction turn were
+both reliably followed by an unprompted, reworded repeat of what was just
+said. This enforcer now swallows that continuation too, the same
+mechanism used for its own nudge followups.
 
 Sits right after `llm` in the pipeline (not after assistant_aggregator) —
 confirmed via testing that FunctionCallInProgressFrame/LLMFullResponseEndFrame
@@ -101,22 +117,23 @@ class LogInteractionEnforcer(FrameProcessor):
                 # cause (e.g. a duplicate STT/LLM trigger upstream of this
                 # processor entirely) — cheap enough to always leave on.
                 logger.info(
-                    "LogInteractionEnforcer: followup round ended (tool_call={}, swallowed_text={!r})",
+                    "LogInteractionEnforcer: swallowed round ended (tool_call={}, text={!r})",
                     self._tool_call_seen,
                     reply_text,
                 )
                 if not self._tool_call_seen:
-                    # A followup round that called a tool (e.g. logInteraction)
-                    # isn't actually done — pipecat's own LLMAssistantAggregator
-                    # automatically runs another round right after any function
-                    # result (see _maybe_push_context_after_function_result),
-                    # independent of this enforcer. That next round is still
-                    # part of this same silent logging exchange, not a new
-                    # reply to the caller, so keep swallowing until a round
-                    # finally finishes with nothing left to call. Confirmed
-                    # live: clearing this unconditionally let that automatic
-                    # continuation's text slip past the swallow and get
-                    # spoken, sounding like the bot repeating itself.
+                    # A swallowed round that itself called a tool (e.g.
+                    # logInteraction) isn't actually done — pipecat's own
+                    # LLMAssistantAggregator automatically runs another round
+                    # right after any function result (see
+                    # _maybe_push_context_after_function_result), independent
+                    # of this enforcer. That next round is still part of the
+                    # same silent exchange, not a new reply to the caller, so
+                    # keep swallowing until a round finally finishes with
+                    # nothing left to call. Confirmed live: clearing this
+                    # unconditionally let that automatic continuation's text
+                    # slip past the swallow and get spoken, sounding like the
+                    # bot repeating itself.
                     self._awaiting_followup = False
             elif not self._tool_call_seen:
                 logger.info(
@@ -129,6 +146,28 @@ class LogInteractionEnforcer(FrameProcessor):
                 if self._worker_handle.worker is not None:
                     self._awaiting_followup = True
                     await self._worker_handle.worker.queue_frames([LLMRunFrame()])
+            elif reply_text.strip():
+                # This round both spoke to the caller AND called a tool in
+                # the same turn — exactly what the system prompt asks for,
+                # no nudge needed. But pipecat's LLMAssistantAggregator still
+                # automatically runs another round right after any function
+                # result, whether or not this enforcer had anything to do
+                # with the tool call. Since this round already said
+                # everything it had to say, that automatic continuation has
+                # nothing legitimate left to add. Confirmed live from a real
+                # call: every one of these (a reply+logInteraction turn, a
+                # reply+book_table+logInteraction turn) was followed by an
+                # unprompted, paraphrased restatement of what was just said,
+                # spoken with no caller input in between. Swallow it the
+                # same way as a nudge followup. A tool-call-only round with
+                # nothing spoken (e.g. a silent check_availability lookup)
+                # deliberately isn't covered here — its continuation is that
+                # turn's first real chance to speak, so let it through.
+                logger.info(
+                    "LogInteractionEnforcer: round replied and called a tool — "
+                    "swallowing the automatic post-tool-call continuation"
+                )
+                self._awaiting_followup = True
             self._tool_call_seen = False
 
         await self.push_frame(frame, direction)
