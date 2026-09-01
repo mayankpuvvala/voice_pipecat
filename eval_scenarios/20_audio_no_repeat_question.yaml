@@ -1,6 +1,11 @@
 name: 20_audio_no_repeat_question
+# See 16_audio_english_stays_english.yaml for why judge.modality is text
+# (this weakens the "was it actually spoken twice" check to the same
+# independent-of-swallow caveat as 11_no_double_speak_same_turn — the
+# logging_enforcer's own decision log is the authoritative source for
+# whether a second occurrence actually reached TTS).
 user: !include user_audio_en.yaml
-judge: !include judge_audio.yaml
+judge: !include judge_text.yaml
 turns:
   - user: "What's your name?"
     expect:

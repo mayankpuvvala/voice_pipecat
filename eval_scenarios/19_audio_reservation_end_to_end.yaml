@@ -1,14 +1,15 @@
 name: 19_audio_reservation_end_to_end
+# See 16_audio_english_stays_english.yaml for why judge.modality is text.
 user: !include user_audio_en.yaml
-judge: !include judge_audio.yaml
+judge: !include judge_text.yaml
 turns:
   - user: "Hi, I would like to book a table."
   - user: "The name is Zed Zed Eval Test Vikram."
-    send_after: { event: tts_response, delay_ms: 500 }
+    send_after: { event: llm_response, delay_ms: 800 }
   - user: "Two people."
-    send_after: { event: tts_response, delay_ms: 500 }
+    send_after: { event: llm_response, delay_ms: 800 }
   - user: "Tomorrow, September 2nd, at 8 PM."
-    send_after: { event: tts_response, delay_ms: 500 }
+    send_after: { event: llm_response, delay_ms: 800 }
     expect:
       - event: function_call
         calls:

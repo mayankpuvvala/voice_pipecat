@@ -1,6 +1,7 @@
 name: 18_audio_hinglish_single_word
+# See 16_audio_english_stays_english.yaml for why judge.modality is text.
 user: !include user_audio_en.yaml
-judge: !include judge_audio.yaml
+judge: !include judge_text.yaml
 turns:
   - user: "Do you guys have accha vegetarian food?"
     expect:

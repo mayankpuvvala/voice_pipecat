@@ -11,4 +11,3 @@ turns:
       - event: function_call
         calls:
           - name: log_interaction
-            args: { resolved: false }

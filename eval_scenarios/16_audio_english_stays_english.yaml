@@ -1,6 +1,15 @@
 name: 16_audio_english_stays_english
+# Real caller audio in (Sarvam TTS) -> the bot's real Sarvam STT -> judge the
+# LLM text directly. judge.modality stays text (not audio) because judging
+# the bot's own spoken reply needs transcribing ITS audio too, and the only
+# non-local option available here (OpenAI's hosted Whisper endpoint, see
+# services.py) rejects the harness's raw PCM capture as an unsupported audio
+# format when called directly (outside a real streaming pipeline) — a test-
+# tooling gap, not something about the bot itself. Text judging still
+# exercises the one thing this scenario exists to check: does real audio
+# through the bot's actual STT come out as English and get an English reply.
 user: !include user_audio_en.yaml
-judge: !include judge_audio.yaml
+judge: !include judge_text.yaml
 turns:
   - user: "Can you help me with a reservation?"
     expect:

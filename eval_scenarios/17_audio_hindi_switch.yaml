@@ -1,6 +1,7 @@
 name: 17_audio_hindi_switch
+# See 16_audio_english_stays_english.yaml for why judge.modality is text.
 user: !include user_audio_hi.yaml
-judge: !include judge_audio.yaml
+judge: !include judge_text.yaml
 turns:
   - user: "Aapke restaurant ka address kya hai?"
     expect:

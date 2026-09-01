@@ -98,6 +98,7 @@ class LogInteractionEnforcer(FrameProcessor):
         self._tool_call_seen = False
         self._reply_text_parts: list[str] = []
         self._awaiting_followup = False
+        self._chain_extends = False
 
     async def process_frame(self, frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -135,19 +136,36 @@ class LogInteractionEnforcer(FrameProcessor):
                     self._tool_call_seen,
                     reply_text,
                 )
-                if not self._tool_call_seen:
+                if not self._tool_call_seen or not self._chain_extends:
                     # A swallowed round that itself called a tool (e.g.
-                    # logInteraction) isn't actually done — pipecat's own
+                    # logInteraction) isn't always done — pipecat's own
                     # LLMAssistantAggregator automatically runs another round
                     # right after any function result (see
                     # _maybe_push_context_after_function_result), independent
-                    # of this enforcer. That next round is still part of the
-                    # same silent exchange, not a new reply to the caller, so
-                    # keep swallowing until a round finally finishes with
-                    # nothing left to call. Confirmed live: clearing this
-                    # unconditionally let that automatic continuation's text
-                    # slip past the swallow and get spoken, sounding like the
-                    # bot repeating itself.
+                    # of this enforcer. For a round that already spoke its
+                    # full reply and called a tool in the SAME turn (the
+                    # `_chain_extends` case below), that automatic
+                    # continuation genuinely has nothing legitimate left to
+                    # add — confirmed live, it was a paraphrased restatement
+                    # every time — so it's right to keep swallowing through
+                    # as many tool-call hops as that chain takes.
+                    #
+                    # But a NUDGE-triggered followup (this enforcer's own
+                    # "you didn't log that" prompt) is different: the round
+                    # that got nudged never actually delivered its message
+                    # (that's why it got nudged), so the followup's job is
+                    # only to silently log — it is NOT guaranteed that
+                    # whatever comes after IT is also just bookkeeping.
+                    # Confirmed live via the eval suite (not guessed): a
+                    # nudge followup that called logInteraction was followed
+                    # by pipecat's automatic continuation asking "How many
+                    # guests will there be?" — a real, new, legitimate
+                    # question — and unconditionally extending the chain
+                    # swallowed it, producing dead air on what should have
+                    # been the bot's next question. So a nudge-originated
+                    # chain (`_chain_extends=False`) only ever swallows its
+                    # own immediate followup round, tool call or not; it
+                    # never extends further.
                     self._awaiting_followup = False
             elif not self._tool_call_seen:
                 logger.info(
@@ -159,6 +177,7 @@ class LogInteractionEnforcer(FrameProcessor):
                 )
                 if self._worker_handle.worker is not None:
                     self._awaiting_followup = True
+                    self._chain_extends = False
                     await self._worker_handle.worker.queue_frames([LLMRunFrame()])
             elif reply_text.strip():
                 # This round both spoke to the caller AND called a tool in
@@ -182,6 +201,7 @@ class LogInteractionEnforcer(FrameProcessor):
                     "swallowing the automatic post-tool-call continuation"
                 )
                 self._awaiting_followup = True
+                self._chain_extends = True
             self._tool_call_seen = False
 
         await self.push_frame(frame, direction)
