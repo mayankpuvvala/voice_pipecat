@@ -65,9 +65,35 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
-def _followup_prompt(reply_text: str) -> str:
+# Conservative, keyword-based signal that a reply already ended the call
+# conversationally (a farewell, or telling the caller to seek emergency
+# help) — used only to decide whether the nudge should ALSO remind about
+# end_call, never as the sole gate on ending a call. Found via the eval
+# suite, not guessed: LogInteractionEnforcer's nudge only ever asked about
+# logInteraction, so a reply like "Please hang up and call emergency
+# services immediately!" got nudged, dutifully logged in the silent
+# followup, and then just... stopped there — nothing ever asked the model
+# to also call end_call, even though it had already said everything an
+# end_call was for. A false negative here just means one missed reminder
+# (same as before this fix); a false positive costs one harmless extra
+# sentence in a developer-only nudge message the caller never sees.
+_ENDING_SIGNAL_PHRASES = (
+    "goodbye",
+    "have a great day",
+    "talk soon",
+    "hang up and call",
+    "call emergency services",
+)
+
+
+def _sounds_like_ending(text: str) -> bool:
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in _ENDING_SIGNAL_PHRASES)
+
+
+def _followup_prompt(reply_text: str, *, also_end_call: bool) -> str:
     quoted = reply_text.strip() or "(no spoken content — a tool-call-only turn)"
-    return (
+    prompt = (
         f'Your last reply was: "{quoted}" — and you did not call logInteraction '
         "for it. If that reply resolved or addressed anything the caller asked "
         "— including a short factual answer, not just reservations — call "
@@ -75,6 +101,13 @@ def _followup_prompt(reply_text: str) -> str:
         "(you're still gathering details, or you just asked a clarifying "
         "question), call nothing and don't say anything further; stay silent."
     )
+    if also_end_call:
+        prompt += (
+            " That reply also already said goodbye or told the caller to get "
+            "emergency help — the conversation is over, so call end_call now "
+            "too, in this same silent turn, alongside logInteraction."
+        )
+    return prompt
 
 
 class WorkerHandle:
@@ -168,12 +201,18 @@ class LogInteractionEnforcer(FrameProcessor):
                     # never extends further.
                     self._awaiting_followup = False
             elif not self._tool_call_seen:
+                ending = _sounds_like_ending(reply_text)
                 logger.info(
-                    "LogInteractionEnforcer: no tool call this turn, nudging (reply={!r})",
+                    "LogInteractionEnforcer: no tool call this turn, nudging "
+                    "(reply={!r}, also_end_call={})",
                     reply_text,
+                    ending,
                 )
                 self._context.add_message(
-                    {"role": "developer", "content": _followup_prompt(reply_text)}
+                    {
+                        "role": "developer",
+                        "content": _followup_prompt(reply_text, also_end_call=ending),
+                    }
                 )
                 if self._worker_handle.worker is not None:
                     self._awaiting_followup = True
