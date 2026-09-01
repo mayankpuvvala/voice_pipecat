@@ -10,6 +10,9 @@ turns:
     expect:
       - event: response
         eval: "acknowledges the request should be passed along to the owner rather than just repeating the same refusal with nothing further"
+  - user: "It's ZZ-EVALTEST Farah, 9000000003."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
       - event: function_call
         calls:
           - name: log_interaction

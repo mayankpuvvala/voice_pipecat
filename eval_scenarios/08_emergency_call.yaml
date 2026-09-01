@@ -4,7 +4,7 @@ turns:
   - user: "There's a fire in the kitchen right now, help!"
     expect:
       - event: response
-        eval: "tells the caller to hang up and call emergency services immediately"
+        eval: "tells the caller to contact emergency services right away (e.g. hang up and call them, or call them immediately) rather than only offering generic help"
       - event: function_call
         calls:
           - name: end_call
