@@ -1,0 +1,11 @@
+name: 01_hours_question
+judge: !include judge_text.yaml
+turns:
+  - user: "Hi, what are your hours?"
+    expect:
+      - event: response
+        eval: "tells the caller the restaurant's operating hours, including that it is closed on Mondays"
+      - event: function_call
+        calls:
+          - name: log_interaction
+            args: { resolved: true }

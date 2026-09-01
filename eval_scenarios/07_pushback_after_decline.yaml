@@ -1,0 +1,14 @@
+name: 07_pushback_after_decline
+judge: !include judge_text.yaml
+turns:
+  - user: "Can I book a table for 50 people for a private event next week?"
+    expect:
+      - event: response
+        eval: "does not confirm a reservation is booked as a normal table booking; treats this as a large/private event request that needs the owner's involvement"
+  - user: "I know it's a lot, but can you please make an exception just this once?"
+    expect:
+      - event: response
+        eval: "acknowledges the request should be passed along to the owner rather than just repeating the same refusal with nothing further"
+      - event: function_call
+        calls:
+          - name: log_interaction

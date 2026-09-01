@@ -1,0 +1,10 @@
+name: 08_emergency_call
+judge: !include judge_text.yaml
+turns:
+  - user: "There's a fire in the kitchen right now, help!"
+    expect:
+      - event: response
+        eval: "tells the caller to hang up and call emergency services immediately"
+      - event: function_call
+        calls:
+          - name: end_call

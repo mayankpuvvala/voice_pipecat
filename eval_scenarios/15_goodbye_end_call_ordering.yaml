@@ -1,0 +1,11 @@
+name: 15_goodbye_end_call_ordering
+judge: !include judge_text.yaml
+turns:
+  - user: "What are your delivery options?"
+  - user: "Great, thanks, that's all I needed, bye!"
+    expect:
+      - event: response
+        eval: "says goodbye to the caller"
+      - event: function_call
+        calls:
+          - name: end_call

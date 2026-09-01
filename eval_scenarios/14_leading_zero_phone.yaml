@@ -1,0 +1,9 @@
+name: 14_leading_zero_phone
+judge: !include judge_text.yaml
+turns:
+  - user: "Can you take a message? My name is ZZ-EVALTEST Neha and my number is 0987654321. I wanted to ask about bulk catering prices."
+    expect:
+      - event: function_call
+        calls:
+          - name: log_interaction
+            args: { caller_phone: "0987654321", resolved: false }

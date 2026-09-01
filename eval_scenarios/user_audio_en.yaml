@@ -1,0 +1,5 @@
+modality: audio
+speech:
+  factory: "eval_scenarios.services.sarvam_user_speech"
+  language: en-IN
+  voice: anushka

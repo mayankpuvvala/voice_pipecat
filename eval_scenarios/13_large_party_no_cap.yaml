@@ -1,0 +1,16 @@
+name: 13_large_party_no_cap
+judge: !include judge_text.yaml
+turns:
+  - user: "I'd like to reserve a table for 20 people on 2026-09-02 at 7 PM. Name's ZZ-EVALTEST Ibrahim."
+    expect:
+      - event: function_call
+        calls:
+          - name: check_availability
+            args: { guests_count: "20" }
+  - expect:
+      - event: function_call
+        calls:
+          - name: book_table
+            args: { guests_count: "20" }
+      - event: response
+        eval: "confirms the table for 20 is booked, without rejecting the size"

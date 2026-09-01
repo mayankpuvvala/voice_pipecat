@@ -1,0 +1,11 @@
+name: 02_dietary_question
+judge: !include judge_text.yaml
+turns:
+  - user: "Do you have vegetarian options?"
+    expect:
+      - event: response
+        eval: "confirms vegetarian options are available"
+      - event: function_call
+        calls:
+          - name: log_interaction
+            args: { resolved: true }

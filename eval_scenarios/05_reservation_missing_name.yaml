@@ -1,0 +1,15 @@
+name: 05_reservation_missing_name
+judge: !include judge_text.yaml
+turns:
+  - user: "I want a table for 2026-09-02 at 8 PM, for two people."
+    expect:
+      - event: response
+        eval: "asks the caller for their name before booking, and does not confirm a reservation is booked yet"
+  - user: "It's ZZ-EVALTEST Karan."
+    expect:
+      - event: function_call
+        calls:
+          - name: book_table
+            args: { caller_name: "ZZ-EVALTEST Karan" }
+      - event: response
+        eval: "confirms the table is booked"

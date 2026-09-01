@@ -1,0 +1,36 @@
+# Eval suite manifest — see README section in this directory (or the top-level
+# session-learnings file, "local testing without a phone") for how this works.
+#
+# The suite spawns app/main.py fresh (via `-t eval`) for each scenario, so
+# there's no manual bot-restart-between-runs step. Scenarios still exercise
+# real OpenAI/Sarvam APIs and write real rows to the configured Google Sheet
+# (see each scenario's caller_name/caller_phone — all prefixed "ZZ-EVALTEST"
+# so they're easy to find and delete afterward).
+concurrency: 3
+runs_dir: eval-runs
+scenarios_dir: .
+spawn: "{python} -m app.main -t eval --port {port}"
+
+suite:
+  - bot: ../app/main.py
+    scenarios:
+      - 01_hours_question
+      - 02_dietary_question
+      - 03_reservation_happy_path
+      - 04_reservation_outside_hours
+      - 05_reservation_missing_name
+      - 06_allergen_out_of_scope
+      - 07_pushback_after_decline
+      - 08_emergency_call
+      - 09_duplicate_question_dedupe
+      - 10_multi_topic_single_call
+      - 11_no_double_speak_same_turn
+      - 12_relative_date_resolution
+      - 13_large_party_no_cap
+      - 14_leading_zero_phone
+      - 15_goodbye_end_call_ordering
+      - 16_audio_english_stays_english
+      - 17_audio_hindi_switch
+      - 18_audio_hinglish_single_word
+      - 19_audio_reservation_end_to_end
+      - 20_audio_no_repeat_question

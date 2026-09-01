@@ -1,0 +1,4 @@
+modality: text
+eval:
+  service: openai
+  model: gpt-4o-mini

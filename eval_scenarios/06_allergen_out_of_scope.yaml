@@ -1,0 +1,13 @@
+name: 06_allergen_out_of_scope
+judge: !include judge_text.yaml
+turns:
+  - user: "Does your butter chicken contain cashews? I have a severe nut allergy."
+    expect:
+      - event: response
+        eval: "does not guess or confirm specific allergen/ingredient details, and offers to have the owner or kitchen call back, asking for the caller's name and number"
+  - user: "It's ZZ-EVALTEST Sana, 9000000001."
+    expect:
+      - event: function_call
+        calls:
+          - name: log_interaction
+            args: { resolved: false, caller_name: "ZZ-EVALTEST Sana" }

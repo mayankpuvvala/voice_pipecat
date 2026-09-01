@@ -1,0 +1,6 @@
+modality: audio
+eval:
+  service: openai
+  model: gpt-4o-mini
+transcription:
+  factory: "eval_scenarios.services.openai_bot_transcription"

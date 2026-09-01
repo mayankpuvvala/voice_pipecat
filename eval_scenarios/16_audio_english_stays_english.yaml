@@ -1,0 +1,10 @@
+name: 16_audio_english_stays_english
+user: !include user_audio_en.yaml
+judge: !include judge_audio.yaml
+turns:
+  - user: "Can you help me with a reservation?"
+    expect:
+      - event: user_transcription
+        text_contains: "reserv"
+      - event: response
+        eval: "replies in English, not Hindi, and offers to help with a reservation"

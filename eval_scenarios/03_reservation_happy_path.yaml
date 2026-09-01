@@ -1,0 +1,20 @@
+name: 03_reservation_happy_path
+judge: !include judge_text.yaml
+turns:
+  - user: "Hi, I'd like to make a reservation."
+  - user: "The name is ZZ-EVALTEST Rahul."
+  - user: "Four of us."
+  - user: "Tomorrow, 2026-09-02, at 8 PM please."
+    expect:
+      - event: function_call
+        calls:
+          - name: check_availability
+            args: { date: "2026-09-02", time: "20:00" }
+  - expect:
+      - event: function_call
+        calls:
+          - name: book_table
+            args: { caller_name: "ZZ-EVALTEST Rahul" }
+          - name: log_interaction
+      - event: response
+        eval: "confirms the table is booked"

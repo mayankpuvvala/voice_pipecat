@@ -1,0 +1,20 @@
+name: 10_multi_topic_single_call
+judge: !include judge_text.yaml
+turns:
+  - user: "Do you have parking?"
+    expect:
+      - event: function_call
+        calls:
+          - name: log_interaction
+  - user: "Also, can I book a table for 2026-09-02 at 12:30 PM for two? Name is ZZ-EVALTEST Divya."
+    expect:
+      - event: function_call
+        calls:
+          - name: check_availability
+  - expect:
+      - event: function_call
+        calls:
+          - name: book_table
+          - name: log_interaction
+      - event: response
+        eval: "confirms the reservation"

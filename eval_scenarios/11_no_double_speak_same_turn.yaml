@@ -1,0 +1,10 @@
+name: 11_no_double_speak_same_turn
+judge: !include judge_text.yaml
+turns:
+  - user: "What's your address?"
+    expect:
+      - event: response
+        eval: "gives the restaurant's address"
+      - event: response
+        absent: true
+        within_ms: 15000

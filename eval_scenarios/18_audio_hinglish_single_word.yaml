@@ -1,0 +1,8 @@
+name: 18_audio_hinglish_single_word
+user: !include user_audio_en.yaml
+judge: !include judge_audio.yaml
+turns:
+  - user: "Do you guys have accha vegetarian food?"
+    expect:
+      - event: response
+        eval: "replies mainly in English, not a full switch to Hindi, despite the single Hindi word in the question"

@@ -1,0 +1,12 @@
+name: 09_duplicate_question_dedupe
+judge: !include judge_text.yaml
+turns:
+  - user: "What time do you close tonight?"
+    expect:
+      - event: function_call
+        calls:
+          - name: log_interaction
+  - user: "Sorry, what time do you close?"
+    expect:
+      - event: response
+        eval: "answers the closing time again without getting confused"

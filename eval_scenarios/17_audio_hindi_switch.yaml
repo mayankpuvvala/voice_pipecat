@@ -1,0 +1,8 @@
+name: 17_audio_hindi_switch
+user: !include user_audio_hi.yaml
+judge: !include judge_audio.yaml
+turns:
+  - user: "Aapke restaurant ka address kya hai?"
+    expect:
+      - event: response
+        eval: "replies in Hindi or Hinglish (not pure English), giving the restaurant's address"

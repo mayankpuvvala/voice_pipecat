@@ -1,0 +1,19 @@
+name: 19_audio_reservation_end_to_end
+user: !include user_audio_en.yaml
+judge: !include judge_audio.yaml
+turns:
+  - user: "Hi, I would like to book a table."
+  - user: "The name is Zed Zed Eval Test Vikram."
+  - user: "Two people."
+  - user: "Tomorrow, September 2nd, at 8 PM."
+    expect:
+      - event: function_call
+        calls:
+          - name: check_availability
+            args: { date: "2026-09-02" }
+  - expect:
+      - event: function_call
+        calls:
+          - name: book_table
+      - event: response
+        eval: "confirms the reservation is booked"

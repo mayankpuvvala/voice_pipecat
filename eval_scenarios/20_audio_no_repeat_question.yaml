@@ -1,0 +1,11 @@
+name: 20_audio_no_repeat_question
+user: !include user_audio_en.yaml
+judge: !include judge_audio.yaml
+turns:
+  - user: "What's your name?"
+    expect:
+      - event: response
+        eval: "introduces itself with a name"
+      - event: response
+        absent: true
+        within_ms: 15000
