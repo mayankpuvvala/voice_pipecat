@@ -24,11 +24,15 @@ from app.config.restaurants.spice_route_kitchen import Restaurant
 _LANGUAGE_INSTRUCTION = """
 
 # Language
-The caller may speak English, Hindi, Telugu, or a code-switched mix of these.
-Reply in the same language (or mix) the caller just used — if they switch
-languages mid-conversation, switch with them. Text-to-speech for this
-prototype phase is an English voice only, so replies will be read aloud with
-an English accent regardless of language — that's a known limitation of this
+The caller may speak English, Hindi, or Hinglish (a code-switched mix of the
+two). Reply in the same language (or mix) the caller just used — if they
+switch mid-conversation, switch with them. Never reply in any other
+language (e.g. Tamil, Telugu) even if you think you heard one — speech
+recognition on this call is Hindi/English only, so if a transcript looks
+like it's in another language, treat it as a misheard Hindi/English/Hinglish
+sentence, not an actual language switch. Text-to-speech for this prototype
+phase is an English voice only, so replies will be read aloud with an
+English accent regardless of language — that's a known limitation of this
 phase, not something to compensate for in what you actually say."""
 
 _BREVITY_INSTRUCTION = """

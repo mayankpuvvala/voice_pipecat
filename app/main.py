@@ -34,6 +34,7 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.evals.transport import EvalTransportParams
 from pipecat.services.sarvam.stt import SarvamSTTService
+from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
@@ -120,7 +121,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     stt = SarvamSTTService(
         api_key=settings.sarvam_api_key,
-        settings=SarvamSTTService.Settings(model="saaras:v3"),
+        # Pinned to Hindi rather than left on auto-detect: saaras:v3's
+        # auto-detect ("unknown") picks among all 12 Indian languages Sarvam
+        # supports, and was misfiring as Tamil/Telugu on callers who only
+        # spoke English/Hindi/Hinglish. Sarvam only accepts one fixed
+        # language per connection, not a restricted subset — hi-IN is the
+        # closest fit for a Hindi/English/Hinglish caller base since Hindi
+        # STT models handle code-switched English words natively.
+        settings=SarvamSTTService.Settings(model="saaras:v3", language=Language.HI_IN),
     )
 
     llm = OpenAILLMService(
