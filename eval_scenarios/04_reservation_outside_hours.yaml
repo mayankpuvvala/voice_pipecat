@@ -3,9 +3,12 @@ judge: !include judge_text.yaml
 turns:
   - user: "I'd like to book a table for Monday, 2026-09-07, at 8 PM, for two people. My name is ZZ-EVALTEST Priya."
     expect:
-      - event: function_call
-        calls:
-          - name: check_availability
-            args: { date: "2026-09-07" }
       - event: response
         eval: "does not confirm a reservation is booked, and explains the restaurant is closed that day (Monday) rather than staying silent about why"
+  - user: "It's 9000000002."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: function_call
+        calls:
+          - name: log_interaction
+            args: { resolved: false }

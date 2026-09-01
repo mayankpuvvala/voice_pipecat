@@ -6,6 +6,7 @@ turns:
       - event: response
         eval: "does not confirm a reservation is booked as a normal table booking; treats this as a large/private event request that needs the owner's involvement"
   - user: "I know it's a lot, but can you please make an exception just this once?"
+    send_after: { event: llm_response, delay_ms: 500 }
     expect:
       - event: response
         eval: "acknowledges the request should be passed along to the owner rather than just repeating the same refusal with nothing further"

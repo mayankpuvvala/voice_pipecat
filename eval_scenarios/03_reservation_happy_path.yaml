@@ -3,8 +3,11 @@ judge: !include judge_text.yaml
 turns:
   - user: "Hi, I'd like to make a reservation."
   - user: "The name is ZZ-EVALTEST Rahul."
+    send_after: { event: llm_response, delay_ms: 500 }
   - user: "Four of us."
+    send_after: { event: llm_response, delay_ms: 500 }
   - user: "Tomorrow, 2026-09-02, at 8 PM please."
+    send_after: { event: llm_response, delay_ms: 500 }
     expect:
       - event: function_call
         calls:

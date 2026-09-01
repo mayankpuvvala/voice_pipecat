@@ -4,8 +4,11 @@ judge: !include judge_audio.yaml
 turns:
   - user: "Hi, I would like to book a table."
   - user: "The name is Zed Zed Eval Test Vikram."
+    send_after: { event: tts_response, delay_ms: 500 }
   - user: "Two people."
+    send_after: { event: tts_response, delay_ms: 500 }
   - user: "Tomorrow, September 2nd, at 8 PM."
+    send_after: { event: tts_response, delay_ms: 500 }
     expect:
       - event: function_call
         calls:

@@ -6,6 +6,7 @@ turns:
       - event: response
         eval: "asks the caller for their name before booking, and does not confirm a reservation is booked yet"
   - user: "It's ZZ-EVALTEST Karan."
+    send_after: { event: llm_response, delay_ms: 500 }
     expect:
       - event: function_call
         calls:

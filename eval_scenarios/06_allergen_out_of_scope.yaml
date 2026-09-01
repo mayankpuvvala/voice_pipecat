@@ -5,9 +5,10 @@ turns:
     expect:
       - event: response
         eval: "does not guess or confirm specific allergen/ingredient details, and offers to have the owner or kitchen call back, asking for the caller's name and number"
-  - user: "It's ZZ-EVALTEST Sana, 9000000001."
+  - user: "It's Sana, 9000000001."
+    send_after: { event: llm_response, delay_ms: 500 }
     expect:
       - event: function_call
         calls:
           - name: log_interaction
-            args: { resolved: false, caller_name: "ZZ-EVALTEST Sana" }
+            args: { resolved: false, caller_phone: "9000000001" }

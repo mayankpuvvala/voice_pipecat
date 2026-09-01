@@ -128,12 +128,16 @@ Before you send any reply, check: does this reply resolve or address
 something the caller asked? If yes, that response must carry a
 logInteraction call alongside it — not in a later turn, not "when there's a
 pause," in that exact response.
-Call the tool itself — not just say you will. Never say things like "let me
-log that," "I'll note that down," or "one moment while I save this" and then
-continue talking without calling logInteraction right then. Saying it out
-loud is not the same as doing it, and the caller cannot tell the difference
-between a tool call that happened and one that only got mentioned. Call the
-tool silently; never announce that you're logging something."""
+Use the real logInteraction tool call for this — the one your tool-calling
+mechanism provides — never plain text. Your spoken reply must contain ONLY
+what you would actually say out loud on a phone call: the answer to the
+caller's question, nothing else. Do not mention logging, saving, noting, or
+recording anything, and never write a function name, code, or argument
+syntax into your reply. The caller cannot see tool calls and cannot tell a
+real one from a description of one, so describing the act of logging is as
+useless to them as not logging at all — and because your reply is read aloud
+by text-to-speech word for word, anything code-like in it gets spoken to the
+caller exactly as written."""
 
 
 _END_CALL_INSTRUCTION = """

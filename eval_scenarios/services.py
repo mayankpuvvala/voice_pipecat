@@ -49,7 +49,13 @@ def sarvam_user_speech(voice_cfg: dict, sample_rate: int):
     """Build a real Sarvam HTTP TTS service to synthesize scripted caller turns.
 
     `voice_cfg.language` picks the target language (e.g. "hi-IN", "en-IN");
-    `voice_cfg.voice` picks a bulbul:v2 speaker (default "anushka").
+    `voice_cfg.voice` picks a bulbul:v3 speaker (default "priya"). bulbul:v2
+    is deprecated on Sarvam's live API as of this writing (confirmed via a
+    real call: "Model 'bulbul:v2' has been deprecated. Please use
+    'bulbul:v3' instead.") — v3's speaker roster is disjoint from v2's, so
+    the voice picked here must be a v3 name (aditya/ritu/priya/neha/rahul/
+    pooja/rohan/simran/kavya/... — see SarvamHttpTTSService's docstring),
+    not a v2 one like "anushka".
     """
     import aiohttp
 
@@ -63,8 +69,8 @@ def sarvam_user_speech(voice_cfg: dict, sample_rate: int):
         aiohttp_session=session,
         sample_rate=sample_rate,
         settings=SarvamHttpTTSService.Settings(
-            voice=voice_cfg.get("voice", "anushka"),
-            model="bulbul:v2",
+            voice=voice_cfg.get("voice", "priya"),
+            model="bulbul:v3",
             language=language,
         ),
     )

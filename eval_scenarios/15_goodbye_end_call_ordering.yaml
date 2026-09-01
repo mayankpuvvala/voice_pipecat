@@ -3,6 +3,7 @@ judge: !include judge_text.yaml
 turns:
   - user: "What are your delivery options?"
   - user: "Great, thanks, that's all I needed, bye!"
+    send_after: { event: llm_response, delay_ms: 500 }
     expect:
       - event: response
         eval: "says goodbye to the caller"
