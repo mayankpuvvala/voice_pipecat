@@ -13,6 +13,7 @@ README.md for the call path from Jio → Exotel → this server.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 
@@ -77,12 +78,6 @@ register_admin_routes(runner_app)
 
 @runner_app.on_event("startup")
 async def _configure_log_verbosity() -> None:
-    # pipecat's dev runner (run_dev_server, called below) hardcodes its own
-    # DEBUG-level sink during arg parsing — this replaces it once the app is
-    # actually up, so Railway's logs aren't flooded with per-frame TTFB/TTS
-    # debug lines on every call by default. Set LOG_LEVEL=DEBUG in Railway's
-    # variables (no redeploy needed, just a restart) to get pipecat's full
-    # per-frame detail back for a specific investigation.
     logger.remove()
     logger.add(sys.stderr, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -120,41 +115,41 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     if not caller_phone and getattr(runner_args, "transport_type", None) == "twilio" and call_data:
         caller_phone = await lookup_caller_number(getattr(call_data, "call_id", "") or "")
 
-    stt = SarvamSTTService(
-        api_key=settings.sarvam_api_key,
-        # REGRESSION FIX: pinning language=HI_IN alone (previous version)
-        # forced mode="transcribe" to render EVERYTHING as Hindi — a caller
-        # speaking plain English ("can you help me with a reservation") came
-        # back transcribed entirely in Devanagari script. mode="codemix" is
-        # Sarvam's purpose-built mode for Hindi-English code-switching: it
-        # transcribes each language's words naturally (English stays English,
-        # Hindi stays Hindi) instead of forcing one script — the actual fit
-        # for this restaurant's Hindi/English/Hinglish caller base. Keeping
-        # language=HI_IN alongside it (rather than reverting to auto-detect)
-        # to still avoid the original bug this was meant to fix: saaras:v3's
-        # full auto-detect drifting to unrelated languages (Tamil/Telugu/
-        # Bengali) it was never asked to support.
-        mode="codemix",
-        settings=SarvamSTTService.Settings(model="saaras:v3", language=Language.HI_IN),
-    )
+    def _build_stt() -> SarvamSTTService:
+        return SarvamSTTService(
+            api_key=settings.sarvam_api_key,
+            mode="codemix",
+            settings=SarvamSTTService.Settings(model="saaras:v3", language=Language.HI_IN),
+        )
 
-    llm = OpenAILLMService(
-        api_key=settings.openai_api_key,
-        settings=OpenAILLMService.Settings(
-            model=settings.openai_model,
-            system_instruction=build_system_prompt(SPICE_ROUTE_KITCHEN),
-        ),
-    )
+    def _build_llm() -> OpenAILLMService:
+        return OpenAILLMService(
+            api_key=settings.openai_api_key,
+            settings=OpenAILLMService.Settings(
+                model=settings.openai_model,
+                system_instruction=build_system_prompt(SPICE_ROUTE_KITCHEN),
+            ),
+        )
 
-    tts = OpenAITTSService(
-        api_key=settings.openai_api_key,
-        voice=settings.openai_tts_voice,
-    )
+    def _build_tts() -> OpenAITTSService:
+        return OpenAITTSService(
+            api_key=settings.openai_api_key,
+            voice=settings.openai_tts_voice,
+        )
 
     context = LLMContext(tools=[log_interaction, check_availability, book_table, end_call])
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+
+    def _build_user_aggregators():
+        return LLMContextAggregatorPair(
+            context,
+            user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        )
+
+    stt, llm, tts, (user_aggregator, assistant_aggregator) = await asyncio.gather(
+        asyncio.to_thread(_build_stt),
+        asyncio.to_thread(_build_llm),
+        asyncio.to_thread(_build_tts),
+        asyncio.to_thread(_build_user_aggregators),
     )
 
     worker_handle = WorkerHandle()
@@ -164,13 +159,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     call_state = {"transcript": ""}
 
     def capture_transcript() -> None:
-        # Shared by caller-hangup (on_client_disconnected, below) and a
-        # bot-initiated hangup (the end_call tool): the websocket transport
-        # only fires on_client_disconnected when the *caller* closes the
-        # connection (see FastAPIWebsocketClient._receive_messages' `if not
-        # self._client.is_closing` guard) — it does NOT fire when we close
-        # it ourselves via EndWorkerFrame. Without this, a call the bot ends
-        # itself would save a recording with no transcript.
         call_state["transcript"] = build_transcript(context)
 
     pipeline = Pipeline(
