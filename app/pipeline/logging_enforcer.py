@@ -35,6 +35,20 @@ model hadn't technically "seen" in context order yet, which reliably failed.
 Instead it captures the reply's own text as it streams through and quotes it
 directly in the nudge, so the nudge is self-contained regardless of when (or
 whether, relative to this) assistant_aggregator's own copy lands in context.
+
+Tracks tool calls via FunctionCallsStartedFrame, not FunctionCallInProgressFrame
+— confirmed via a real eval run that FunctionCallInProgressFrame is NOT
+reliably ordered before the LLMFullResponseEndFrame of the same round.
+BaseLLMService.run_function_calls broadcasts FunctionCallsStartedFrame
+synchronously for the whole batch, then (for sequential execution) only
+*enqueues* each call for a background task — FunctionCallInProgressFrame is
+broadcast later, from that task, once it actually starts running. A round's
+LLMFullResponseEndFrame can reach this processor before that task gets
+scheduled, which read as "no tool call" here and cleared the swallow state
+one round early — the observed symptom was an extra, unprompted turn typing
+right past a question the caller hadn't even answered yet, not a repeat of
+the same words. FunctionCallsStartedFrame (a SystemFrame, so it doesn't wait
+in the normal per-round frame flow) doesn't have this gap.
 """
 
 from __future__ import annotations
@@ -42,7 +56,7 @@ from __future__ import annotations
 from loguru import logger
 
 from pipecat.frames.frames import (
-    FunctionCallInProgressFrame,
+    FunctionCallsStartedFrame,
     LLMFullResponseEndFrame,
     LLMRunFrame,
     LLMTextFrame,
@@ -104,7 +118,7 @@ class LogInteractionEnforcer(FrameProcessor):
                 # before this — the more tool calls a turn needed, the more
                 # times it repeated.
                 return
-        elif isinstance(frame, FunctionCallInProgressFrame):
+        elif isinstance(frame, FunctionCallsStartedFrame):
             self._tool_call_seen = True
         elif isinstance(frame, LLMFullResponseEndFrame):
             reply_text = "".join(self._reply_text_parts)
