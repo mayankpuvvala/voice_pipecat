@@ -122,13 +122,19 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     stt = SarvamSTTService(
         api_key=settings.sarvam_api_key,
-        # Pinned to Hindi rather than left on auto-detect: saaras:v3's
-        # auto-detect ("unknown") picks among all 12 Indian languages Sarvam
-        # supports, and was misfiring as Tamil/Telugu on callers who only
-        # spoke English/Hindi/Hinglish. Sarvam only accepts one fixed
-        # language per connection, not a restricted subset — hi-IN is the
-        # closest fit for a Hindi/English/Hinglish caller base since Hindi
-        # STT models handle code-switched English words natively.
+        # REGRESSION FIX: pinning language=HI_IN alone (previous version)
+        # forced mode="transcribe" to render EVERYTHING as Hindi — a caller
+        # speaking plain English ("can you help me with a reservation") came
+        # back transcribed entirely in Devanagari script. mode="codemix" is
+        # Sarvam's purpose-built mode for Hindi-English code-switching: it
+        # transcribes each language's words naturally (English stays English,
+        # Hindi stays Hindi) instead of forcing one script — the actual fit
+        # for this restaurant's Hindi/English/Hinglish caller base. Keeping
+        # language=HI_IN alongside it (rather than reverting to auto-detect)
+        # to still avoid the original bug this was meant to fix: saaras:v3's
+        # full auto-detect drifting to unrelated languages (Tamil/Telugu/
+        # Bengali) it was never asked to support.
+        mode="codemix",
         settings=SarvamSTTService.Settings(model="saaras:v3", language=Language.HI_IN),
     )
 
