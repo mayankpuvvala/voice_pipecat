@@ -76,14 +76,15 @@ register_admin_routes(runner_app)
 
 
 @runner_app.on_event("startup")
-async def _reduce_log_verbosity() -> None:
+async def _configure_log_verbosity() -> None:
     # pipecat's dev runner (run_dev_server, called below) hardcodes its own
     # DEBUG-level sink during arg parsing — this replaces it once the app is
     # actually up, so Railway's logs aren't flooded with per-frame TTFB/TTS
-    # debug lines on every call. Our own logger.info/.exception calls stay
-    # visible either way.
+    # debug lines on every call by default. Set LOG_LEVEL=DEBUG in Railway's
+    # variables (no redeploy needed, just a restart) to get pipecat's full
+    # per-frame detail back for a specific investigation.
     logger.remove()
-    logger.add(sys.stderr, level="INFO")
+    logger.add(sys.stderr, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
 transport_params = {

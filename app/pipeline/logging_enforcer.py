@@ -95,6 +95,16 @@ class LogInteractionEnforcer(FrameProcessor):
             self._reply_text_parts = []
 
             if self._awaiting_followup:
+                # Log at INFO (not DEBUG) deliberately: this is the one place
+                # that would prove or disprove whether a repeated reply came
+                # from this enforcer's own followup round vs. some other
+                # cause (e.g. a duplicate STT/LLM trigger upstream of this
+                # processor entirely) — cheap enough to always leave on.
+                logger.info(
+                    "LogInteractionEnforcer: followup round ended (tool_call={}, swallowed_text={!r})",
+                    self._tool_call_seen,
+                    reply_text,
+                )
                 if not self._tool_call_seen:
                     # A followup round that called a tool (e.g. logInteraction)
                     # isn't actually done — pipecat's own LLMAssistantAggregator
@@ -109,7 +119,10 @@ class LogInteractionEnforcer(FrameProcessor):
                     # spoken, sounding like the bot repeating itself.
                     self._awaiting_followup = False
             elif not self._tool_call_seen:
-                logger.debug("LogInteractionEnforcer: no tool call this turn, nudging")
+                logger.info(
+                    "LogInteractionEnforcer: no tool call this turn, nudging (reply={!r})",
+                    reply_text,
+                )
                 self._context.add_message(
                     {"role": "developer", "content": _followup_prompt(reply_text)}
                 )
