@@ -66,23 +66,25 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
 # Conservative, keyword-based signal that a reply already ended the call
-# conversationally (a farewell, or telling the caller to seek emergency
-# help) — used only to decide whether the nudge should ALSO remind about
-# end_call, never as the sole gate on ending a call. Found via the eval
-# suite, not guessed: LogInteractionEnforcer's nudge only ever asked about
-# logInteraction, so a reply like "Please hang up and call emergency
-# services immediately!" got nudged, dutifully logged in the silent
-# followup, and then just... stopped there — nothing ever asked the model
-# to also call end_call, even though it had already said everything an
-# end_call was for. A false negative here just means one missed reminder
-# (same as before this fix); a false positive costs one harmless extra
-# sentence in a developer-only nudge message the caller never sees.
+# conversationally (a farewell, or telling the caller to hang up for an
+# emergency — see the restaurant prompt's emergency rule, which is
+# deliberately just "hang up," not "call emergency services": there's no
+# single fixed emergency number in India the way there is elsewhere) —
+# used only to decide whether the nudge should ALSO remind about end_call,
+# never as the sole gate on ending a call. Found via the eval suite, not
+# guessed: LogInteractionEnforcer's nudge only ever asked about
+# logInteraction, so an emergency reply telling the caller to hang up got
+# nudged, dutifully logged in the silent followup, and then just...
+# stopped there — nothing ever asked the model to also call end_call, even
+# though it had already said everything an end_call was for. A false
+# negative here just means one missed reminder (same as before this fix);
+# a false positive costs one harmless extra sentence in a developer-only
+# nudge message the caller never sees.
 _ENDING_SIGNAL_PHRASES = (
     "goodbye",
     "have a great day",
     "talk soon",
-    "hang up and call",
-    "call emergency services",
+    "hang up",
 )
 
 
@@ -103,9 +105,9 @@ def _followup_prompt(reply_text: str, *, also_end_call: bool) -> str:
     )
     if also_end_call:
         prompt += (
-            " That reply also already said goodbye or told the caller to get "
-            "emergency help — the conversation is over, so call end_call now "
-            "too, in this same silent turn, alongside logInteraction."
+            " That reply also already said goodbye or told the caller to hang "
+            "up (e.g. for an emergency) — the conversation is over, so call "
+            "end_call now too, in this same silent turn, alongside logInteraction."
         )
     return prompt
 
