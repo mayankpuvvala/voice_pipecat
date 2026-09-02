@@ -202,7 +202,22 @@ class LogInteractionEnforcer(FrameProcessor):
                     # own immediate followup round, tool call or not; it
                     # never extends further.
                     self._awaiting_followup = False
-            elif not self._tool_call_seen:
+            elif not self._tool_call_seen and reply_text.strip():
+                # `reply_text.strip()` matters here, not just `not
+                # tool_call_seen`: pipecat's automatic post-tool-call
+                # continuation (see the swallow branch below) can itself
+                # come back with neither text nor a tool call — the model
+                # genuinely had nothing left to add. Confirmed live via the
+                # eval suite: that empty round used to fall into this branch
+                # too (nothing "not tool_call_seen" distinguishes an empty
+                # round from a real unlogged reply), nudging the model over
+                # a reply that was never actually withheld. The nudge
+                # followup then sometimes produced its own stray restatement
+                # (harmless — swallowed the same as any nudge followup, see
+                # above — but wasted a full LLM round-trip and could chain
+                # into more empty rounds). An empty round has nothing to log
+                # either way, so it's treated the same as the tool-call-only
+                # nothing-spoken case just below: let it through untouched.
                 ending = _sounds_like_ending(reply_text)
                 logger.info(
                     "LogInteractionEnforcer: no tool call this turn, nudging "
