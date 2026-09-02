@@ -44,6 +44,7 @@ from app.admin.routes import register_admin_routes
 from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN
 from app.config.settings import settings
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
+from app.pipeline.narration_filter import NarratedToolCallFilter
 from app.pipeline.prompts import build_system_prompt
 from app.pipeline.recording import save_call_recording
 from app.pipeline.transcript import build_transcript
@@ -154,6 +155,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     worker_handle = WorkerHandle()
     logging_enforcer = LogInteractionEnforcer(context, worker_handle)
+    narration_filter = NarratedToolCallFilter()
 
     audiobuffer = AudioBufferProcessor(auto_start_recording=True)
     call_state = {"transcript": ""}
@@ -168,6 +170,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             user_aggregator,
             llm,
             logging_enforcer,
+            narration_filter,
             tts,
             audiobuffer,
             transport.output(),
