@@ -34,3 +34,4 @@ suite:
       - 18_audio_hinglish_single_word
       - 19_audio_reservation_end_to_end
       - 20_audio_no_repeat_question
+      - 21_audio_standalone_yes_stays_english

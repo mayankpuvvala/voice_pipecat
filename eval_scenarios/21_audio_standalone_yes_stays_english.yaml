@@ -1,0 +1,18 @@
+name: 21_audio_standalone_yes_stays_english
+# Repro for a real call where the caller's entire turn was just "yeah" in
+# response to a yes/no question, and Sarvam STT transcribed it as the Hindi
+# word "या" — which flipped the bot into a Hindi reply and made it re-ask the
+# question instead of treating "या" as "yes". See 16_audio_english_stays_english
+# for why judge.modality is text.
+user: !include user_audio_en.yaml
+judge: !include judge_text.yaml
+turns:
+  - user: "Do you take reservations?"
+    expect:
+      - event: response
+        eval: "replies in English, and asks or offers whether the caller would like to make a reservation"
+  - user: "Yeah."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: response
+        eval: "replies in English (not Hindi), treats it as an affirmative answer, and moves the reservation forward (e.g. asking for name/date/time/party size) instead of re-asking whether the caller wants a reservation"

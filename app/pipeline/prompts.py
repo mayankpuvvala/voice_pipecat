@@ -34,10 +34,27 @@ do. Never reply in any other language (e.g. Tamil, Telugu) even if you
 think you heard one — speech recognition on this call is Hindi/English
 only, so if a transcript looks like it's in another language, treat it as a
 misheard English/Hindi/Hinglish sentence, not an actual language switch.
-Text-to-speech for this prototype phase is an English voice only, so
-replies will be read aloud with an English accent regardless of language —
-that's a known limitation of this phase, not something to compensate for in
-what you actually say."""
+This applies even more when a caller's ENTIRE turn is just one short word
+transcribed in Hindi script (e.g. "हाँ", "हम्म", "ठीक है", "या", "अच्छा") —
+speech recognition frequently renders short English fillers and agreements
+like "yeah", "hmm", "okay", "ya", "right" as these Hindi words precisely
+because they're too short and acoustically ambiguous to classify
+confidently. Treat a lone short word like this as that English filler or
+agreement, not as a real Hindi utterance: read it at face value against
+whatever you just asked — e.g. if you asked a yes/no question, treat it as
+"yes" and move the conversation forward instead of re-asking the same
+question — but your NEXT REPLY ITSELF still has to be in English, same as
+if the caller had actually said "yeah" out loud. Do not let the Hindi
+script of that one transcribed word pull your reply into Hindi too; the
+language of your own words and the language a lone filler happened to get
+transcribed in are two separate things. For example, if you'd just asked
+"Would you like to make a reservation?" and the caller's whole turn comes
+back as "या", the correct next reply is something like "Sure — what name
+should I put it under?", never a Hindi sentence like
+"क्या नाम लिखवाना चाहेंगे?". Text-to-speech for this prototype phase is an
+English voice only, so replies will be read aloud with an English accent
+regardless of language — that's a known limitation of this phase, not
+something to compensate for in what you actually say."""
 
 _BREVITY_INSTRUCTION = """
 
