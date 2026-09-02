@@ -48,6 +48,7 @@ from app.pipeline.prompts import build_system_prompt
 from app.pipeline.recording import save_call_recording
 from app.pipeline.second_paragraph_filter import SecondParagraphFilter
 from app.pipeline.transcript import build_transcript
+from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
 from app.services.twilio_client import lookup_caller_number
 from app.tools.end_call import end_call
 from app.tools.log_interaction import log_interaction
@@ -169,6 +170,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     worker_handle = WorkerHandle()
     logging_enforcer = LogInteractionEnforcer(context, worker_handle)
+    turn_taking_guard = OneUtterancePerTurnGuard(context)
     second_paragraph_filter = SecondParagraphFilter()
 
     audiobuffer = AudioBufferProcessor(auto_start_recording=True)
@@ -184,6 +186,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             user_aggregator,
             llm,
             logging_enforcer,
+            turn_taking_guard,
             second_paragraph_filter,
             tts,
             audiobuffer,
