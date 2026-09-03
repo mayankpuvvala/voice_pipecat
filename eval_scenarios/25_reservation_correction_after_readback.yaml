@@ -1,0 +1,32 @@
+# _RESERVATION_TOOL_INSTRUCTION: "If they correct any detail, update it and
+# read the corrected version back again before proceeding -- don't assume
+# the second attempt is right either." Scenario 22 covers a garbled/unclear
+# time; this covers the caller catching and correcting a detail themselves
+# after hearing a clean read-back, which is a different path (no book_table
+# should fire until the corrected version is confirmed).
+name: 25_reservation_correction_after_readback
+judge: !include judge_text.yaml
+turns:
+  - user: "I'd like to book a table for tomorrow, 2026-09-05, at 7 PM for four people. Name is ZZ-EVALTEST Divya."
+    expect:
+      - event: function_call
+        calls:
+          - name: check_availability
+            args: { date: "2026-09-05", time: "19:00" }
+      - event: response
+        eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
+  - user: "Actually, can we make it 8 PM instead?"
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: response
+        eval: "reads back the corrected 8 PM time along with the date and guest count and asks the caller to confirm again, and does not say a table is already booked"
+  - user: "Yes, that's right."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: function_call
+        calls:
+          - name: book_table
+            args: { caller_name: "ZZ-EVALTEST Divya", time: "20:00" }
+          - name: log_interaction
+      - event: response
+        eval: "confirms the table is booked for the corrected 8 PM time"

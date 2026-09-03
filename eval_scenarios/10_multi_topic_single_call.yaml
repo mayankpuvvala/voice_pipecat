@@ -16,10 +16,22 @@ turns:
         eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
   - user: "Yes, that's right."
     send_after: { event: llm_response, delay_ms: 500 }
+    # book_table, THEN the spoken confirmation, THEN log_interaction --
+    # confirmed live as the bot's actual (correct) chronological order:
+    # book_table and log_interaction land in separate rounds either side of
+    # the spoken confirmation text, not both before it. The previous
+    # expect: waited for BOTH function calls before checking for a spoken
+    # confirmation, so it only ever looked at whatever llm_response came
+    # AFTER log_interaction (a generic "anything else?" follow-up) and
+    # missed the real confirmation ("Your table is confirmed for two on
+    # September 20th at 12:30 PM...") that had already gone by earlier --
+    # a false fail on a reply that was actually correct.
     expect:
       - event: function_call
         calls:
           - name: book_table
-          - name: log_interaction
       - event: response
         eval: "confirms the reservation"
+      - event: function_call
+        calls:
+          - name: log_interaction

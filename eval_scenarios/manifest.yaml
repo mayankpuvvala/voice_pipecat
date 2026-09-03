@@ -38,3 +38,9 @@ suite:
       - 21_audio_standalone_yes_stays_english
       - 22_garbled_time_needs_confirmation
       - 23_off_topic_smalltalk
+      - 24_reservation_confirm_and_goodbye_same_turn
+      - 25_reservation_correction_after_readback
+      - 26_cancel_existing_reservation_not_supported
+      - 27_bot_disclosure_question
+      - 28_complaint_taken_as_message
+      - 29_midflow_guest_count_change

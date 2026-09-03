@@ -120,7 +120,11 @@ async def book_table(
         guests_count: Number of guests, as a string, e.g. "5".
         caller_name: The name to hold the table under. Required — ask the caller
             for their name if they haven't given one; never pass a blank or
-            placeholder value just to get the call through.
+            placeholder value just to get the call through. Pass it exactly as
+            the caller said it — never shorten it, "clean it up," or drop any
+            part of it because it sounds unusual; an unfamiliar-sounding name
+            is still the caller's real name, not a transcription artifact to
+            correct.
         caller_phone: Caller's callback number if given, otherwise empty string.
     """
     if not caller_name.strip():

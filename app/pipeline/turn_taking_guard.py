@@ -66,6 +66,20 @@ class OneUtterancePerTurnGuard(FrameProcessor):
         """
         return sum(1 for m in self._context.messages if m.get("role") == "user")
 
+    def has_spoken_this_turn(self) -> bool:
+        """Whether real text has actually reached the caller for the turn in progress.
+
+        Exposed for end_call.py's own structural gate: `_answered_turn_id` is
+        only set in the LLMTextFrame branch above, the moment non-suppressed
+        text is actually forwarded -- so this is true only once the caller
+        has genuinely heard something this turn, not merely because a round
+        with a tool call happened to run. A silent tool-calls-only round
+        (confirmed live: book_table -> logInteraction -> end_call with zero
+        spoken text in between) leaves `_answered_turn_id` behind, so this
+        correctly returns false for exactly that case.
+        """
+        return self._answered_turn_id == self._current_turn_id()
+
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 

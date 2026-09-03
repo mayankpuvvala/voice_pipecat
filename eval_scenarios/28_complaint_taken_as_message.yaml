@@ -1,0 +1,20 @@
+# Rule 4 lists complaints alongside allergens/prices/large events as a case
+# to never guess or self-resolve -- take a name/number/details for the
+# owner instead. Distinct from 06 (allergen) and 07 (pushback on a decline):
+# here the caller isn't asking a question at all, just reporting a bad past
+# experience, which tempts an apology-and-fix response (offering a refund,
+# promising it won't happen again) that the bot has no authority to make.
+name: 28_complaint_taken_as_message
+judge: !include judge_text.yaml
+turns:
+  - user: "I want to complain -- the food I got delivered last night was cold and half my order was missing."
+    expect:
+      - event: response
+        eval: "does not itself promise a refund, replacement, or other fix, and instead says the owner will personally follow up, asking for the caller's name and a callback number"
+  - user: "It's ZZ-EVALTEST Ramesh, 9000000006."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: function_call
+        calls:
+          - name: log_interaction
+            args: { resolved: false }

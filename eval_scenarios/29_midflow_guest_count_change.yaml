@@ -1,0 +1,32 @@
+# 25 covers a correction made after the final read-back; this covers a
+# correction made mid-flow, while the bot is still asking one-thing-at-a-time
+# for the reservation's basic details (system prompt rule 2 / brevity
+# instruction). The check_availability args below confirm the corrected
+# guest count (5, not the originally-stated 3) actually propagated through
+# to the tool call rather than the bot silently keeping the first number.
+name: 29_midflow_guest_count_change
+judge: !include judge_text.yaml
+turns:
+  - user: "I'd like to make a reservation."
+    expect:
+      - event: response
+        eval: "asks for one missing reservation detail (name, guest count, or date/time), not more than one at once"
+  - user: "ZZ-EVALTEST Meena."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: response
+        eval: "acknowledges the name and asks for the next missing detail, not more than one at once"
+  - user: "Three of us -- actually, wait, make that five."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: response
+        eval: "goes with the corrected count of five, not three, and asks for the next missing detail without restarting or re-asking for the name"
+  - user: "Tomorrow, 2026-09-05, at 1 PM."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: function_call
+        calls:
+          - name: check_availability
+            args: { date: "2026-09-05", time: "13:00", guests_count: "5" }
+      - event: response
+        eval: "reads back the date, time, and a guest count of five and asks the caller to confirm before booking"

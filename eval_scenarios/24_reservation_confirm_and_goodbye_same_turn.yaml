@@ -1,0 +1,39 @@
+# Regression test for the turn_taking_guard/end_call fix: a real eval run
+# had the model call book_table -> logInteraction -> end_call in ONE
+# response with ZERO spoken text anywhere in the sequence, hanging up on a
+# caller who'd just confirmed a reservation with no idea whether it was
+# actually booked. That's most likely to happen exactly here: the caller's
+# final "yes" also says goodbye in the same breath, tempting the model to
+# wrap booking + farewell + hangup into a single silent tool-call chain.
+# If the guard regresses, the second expectation below times out (no
+# response event ever arrives) instead of failing on content.
+name: 24_reservation_confirm_and_goodbye_same_turn
+judge: !include judge_text.yaml
+turns:
+  - user: "I'd like to book a table for tomorrow, 2026-09-05, at 7:30 PM for two people. Name is ZZ-EVALTEST Vikram."
+    expect:
+      - event: function_call
+        calls:
+          - name: check_availability
+            args: { date: "2026-09-05", time: "19:30" }
+      - event: response
+        eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
+  - user: "Yes, that's right — that's everything, thanks so much, bye!"
+    send_after: { event: llm_response, delay_ms: 500 }
+    # book_table, THEN the spoken confirmation, THEN log_interaction and
+    # end_call -- see 10_multi_topic_single_call.yaml for why: confirmed
+    # live that book_table and log_interaction land in separate rounds
+    # either side of the spoken confirmation text, not both before it, so
+    # an expect: waiting for both function calls before checking for a
+    # response missed the real confirmation that had already gone by.
+    expect:
+      - event: function_call
+        calls:
+          - name: book_table
+            args: { caller_name: "ZZ-EVALTEST Vikram" }
+      - event: response
+        eval: "confirms the table is booked and says goodbye to the caller"
+      - event: function_call
+        calls:
+          - name: log_interaction
+          - name: end_call

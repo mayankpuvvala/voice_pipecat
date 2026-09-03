@@ -205,6 +205,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             "caller_phone": caller_phone,
             "worker_handle": worker_handle,
             "capture_transcript": capture_transcript,
+            "turn_taking_guard": turn_taking_guard,
         },
     )
     worker_handle.worker = worker

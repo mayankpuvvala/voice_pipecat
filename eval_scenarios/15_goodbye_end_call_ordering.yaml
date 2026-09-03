@@ -1,7 +1,34 @@
 name: 15_goodbye_end_call_ordering
+# judge.modality is text, NOT audio -- tried audio first (like
+# 11_no_double_speak_same_turn.yaml), but confirmed live it breaks this
+# scenario specifically: `response` in audio modality doesn't resolve until
+# the bot's full TTS playback finishes and gets transcribed, several
+# seconds after the LLM actually decided to call end_call. Since the
+# harness matches expectations strictly in order and only scans forward,
+# by the time the delayed `response` match completes, the real
+# `function_call: end_call` event (which fired near-instantly, right when
+# the model decided) has already gone by -- the harness never finds it and
+# the turn fails with "end_call not seen" even though the bot did
+# everything right and in the correct order. Text modality's `response`
+# (llm_response) resolves at essentially the same instant the LLM decides,
+# same as function_call, so the two stay in their true relative order.
+#
+# Turn 0 has its own (contentless) `expect:` below -- confirmed live this
+# is required, not decorative. Without it, turn 0 has nothing to wait on,
+# so the harness starts setting up turn 1 (including its `send_after`
+# wait) immediately; when turn 0's own real llm_response then arrives, the
+# harness's turn-tracking has already moved on to "turn 1" and attributes
+# that leftover text to turn 1's aggregate instead. The judge then fires
+# on that stale, wrong-turn aggregate (turn 0's delivery-options answer,
+# which obviously never says goodbye) and fails the turn before turn 1's
+# actual reply -- which did say goodbye -- ever arrives. Waiting for
+# turn 0's own llm_response here closes it out before turn 1 begins, so
+# nothing bleeds across the boundary.
 judge: !include judge_text.yaml
 turns:
   - user: "What are your delivery options?"
+    expect:
+      - event: llm_response
   - user: "Great, thanks, that's all I needed, bye!"
     send_after: { event: llm_response, delay_ms: 500 }
     expect:

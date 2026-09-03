@@ -152,7 +152,7 @@ directly — see `Dockerfile`.
 
 ## Eval suite
 
-`eval_scenarios/manifest.yaml` lists 23 behavioral scenarios (text and
+`eval_scenarios/manifest.yaml` lists 29 behavioral scenarios (text and
 audio) run against a fresh `app/main.py -t eval` bot per scenario, judged by
 `gpt-4o-mini`. This costs real OpenAI/Sarvam API calls and writes real rows
 to the configured Google Sheet — every scenario's caller name/phone is
@@ -185,8 +185,8 @@ Two things confirmed the hard way, not guessed:
 
 **Known fixture staleness, not a bot bug if you see these fail:**
 
-- A handful of scenarios (`03`, `10`, `12`, `13`, `19`) hardcode an absolute
-  reservation date. These necessarily rot as real time passes them by —
+- A handful of scenarios (`03`, `10`, `12`, `13`, `19`, `24`, `25`, `29`)
+  hardcode an absolute reservation date. These necessarily rot as real time passes them by —
   the eval YAML format has no templating for "tomorrow," so there's no way
   to keep them evergreen short of hand-bumping the dates periodically (or
   building a preprocessing step that does it). If one of these fails on a

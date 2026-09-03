@@ -16,7 +16,19 @@ the same credentials the bot itself uses (loaded via app.config.settings):
   mode="codemix") rather than a proxy.
 - `openai_bot_transcription` transcribes the bot's synthesized replies with
   OpenAI's hosted Whisper endpoint (HTTP, not local) so the judge can assert
-  on what the bot's real TTS audio actually said.
+  on what the bot's real TTS audio actually said. This is a small duck-typed
+  batch-transcription object, NOT pipecat's own OpenAISTTService — that
+  service's run_stt() is built for OpenAI's realtime WebSocket API, and
+  calling it once on a single captured buffer outside a real streaming
+  pipeline rejects the harness's raw PCM as an unsupported audio format
+  (confirmed live: see 16_audio_english_stays_english.yaml's docstring for
+  why every audio scenario kept judge.modality as text to work around this).
+  pipecat.evals.transcribe.EvalTranscriber only ever calls
+  `run_stt(pcm) -> AsyncGenerator[TranscriptionFrame]` on whatever a
+  transcription factory returns, so the fix here sidesteps the realtime API
+  entirely: wrap the raw PCM in a WAV header and call OpenAI's batch
+  audio.transcriptions.create endpoint directly (the same call verified
+  working against a real call recording during a live debugging session).
 
 Referenced from scenario YAML via the `factory:` escape hatch documented in
 pipecat.evals.speech / pipecat.evals.transcribe, e.g.:
@@ -77,10 +89,41 @@ def sarvam_user_speech(voice_cfg: dict, sample_rate: int):
 
 
 def openai_bot_transcription(config: dict, sample_rate: int):
-    """Build a real OpenAI Whisper (HTTP) STT service to transcribe bot audio."""
-    from pipecat.services.openai.stt import OpenAISTTService
+    """Build an STT-shaped object that batch-transcribes bot audio via OpenAI's
+    REST Whisper endpoint.
 
-    return OpenAISTTService(
-        api_key=settings.openai_api_key,
-        settings=OpenAISTTService.Settings(model="whisper-1"),
-    )
+    Not pipecat's OpenAISTTService — see this module's docstring for why that
+    one doesn't work here (it's a realtime-WebSocket service, not a one-shot
+    batch transcriber, and rejects the harness's captured PCM as an
+    unsupported format when called directly). EvalTranscriber only calls
+    `run_stt(pcm)` on whatever this factory returns and iterates it as an
+    async generator of frames (see transcribe.py) — nothing else about
+    pipecat's STTService interface is exercised, so this small object
+    implementing just that one method is enough.
+    """
+    import io
+    import wave
+
+    from openai import AsyncOpenAI
+    from pipecat.frames.frames import TranscriptionFrame
+
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+    class _BatchWhisperTranscriber:
+        async def run_stt(self, audio: bytes):
+            buffer = io.BytesIO()
+            with wave.open(buffer, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)  # pipecat's captured audio is 16-bit PCM throughout
+                wf.setframerate(sample_rate)
+                wf.writeframes(audio)
+            buffer.seek(0)
+            buffer.name = "audio.wav"  # gives the upload a filename/content-type
+
+            response = await client.audio.transcriptions.create(
+                model="whisper-1",
+                file=buffer,
+            )
+            yield TranscriptionFrame(text=response.text, user_id="", timestamp="")
+
+    return _BatchWhisperTranscriber()

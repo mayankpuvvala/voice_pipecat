@@ -1,11 +1,18 @@
 name: 20_audio_no_repeat_question
-# See 16_audio_english_stays_english.yaml for why judge.modality is text
-# (this weakens the "was it actually spoken twice" check to the same
-# independent-of-swallow caveat as 11_no_double_speak_same_turn — the
-# logging_enforcer's own decision log is the authoritative source for
-# whether a second occurrence actually reached TTS).
+# judge.modality is audio, not text. 16_audio_english_stays_english.yaml's
+# comment (kept there, still accurate for that scenario) explains why every
+# other audio scenario keeps judge.modality as text: pipecat's own
+# OpenAISTTService is a realtime-WebSocket service and rejects the harness's
+# raw captured PCM when called directly outside a real streaming pipeline.
+# This scenario needs the real signal specifically (its whole point is that
+# a second utterance never reaches the caller — text modality's `response`
+# is the raw pre-filter LLM output, where a second occurrence is expected,
+# harmless, already-swallowed behavior, not a bug), so it uses
+# eval_scenarios/services.py's openai_bot_transcription instead: a small
+# batch-transcription wrapper around OpenAI's REST Whisper endpoint that
+# sidesteps the realtime-API mismatch entirely.
 user: !include user_audio_en.yaml
-judge: !include judge_text.yaml
+judge: !include judge_audio.yaml
 turns:
   - user: "What's your name?"
     expect:

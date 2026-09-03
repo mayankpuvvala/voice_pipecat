@@ -1,0 +1,19 @@
+# There is no cancel/modify tool (see app/tools/reservations.py -- only
+# check_availability and book_table exist), and cancellation isn't in the
+# restaurant facts either. Per rule 4, this must be treated like any other
+# unknown request: no guessing, no pretending to cancel something, take a
+# message for the owner instead.
+name: 26_cancel_existing_reservation_not_supported
+judge: !include judge_text.yaml
+turns:
+  - user: "Hi, I need to cancel my reservation for tonight, it's under the name ZZ-EVALTEST Priya."
+    expect:
+      - event: response
+        eval: "does not claim to have cancelled or modified any reservation itself, and instead offers to pass this along to the owner, asking for the caller's name and a callback number"
+  - user: "It's 9000000005."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: function_call
+        calls:
+          - name: log_interaction
+            args: { resolved: false }

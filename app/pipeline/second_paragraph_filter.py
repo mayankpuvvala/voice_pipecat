@@ -86,9 +86,42 @@ _NARRATES_LOGGING = re.compile(
     re.IGNORECASE,
 )
 
+# A third shape, confirmed live via a real eval run (verified against the
+# actual TTS audio, not just raw text -- the harness's own audio-modality
+# judge transcribed the bot's spoken reply as ending in "...Log Interaction."):
+# the model narrated the tool call in template-brace syntax --
+# "...anything else? \n\n{{ \n\nlog_interaction}}" -- instead of the
+# functionName(...) shape _CODE_SHAPED looks for, so no identifier here is
+# ever followed by "(". Worse, the stray "\n\n" landed *inside* the braces,
+# which splits this one narration across three separate paragraphs under
+# this file's own paragraph-at-a-time evaluation ("...anything else? ",
+# "{{ ", "log_interaction}}") -- so a pattern requiring both "{{" and "}}"
+# in the same paragraph would still miss it.
+#
+# A re-run to verify that fix caught a fourth shape in the very next live
+# call: the model narrated the *entire raw tool-call arguments object*,
+# single-brace JSON, not doubled -- '...How can I assist you further?
+# \n\n{"topic":"address inquiry","resolved":true,...,"call_confidence":
+# "high"}' -- confirmed reaching real TTS audio the same way (transcribed
+# spoken output read the JSON keys/values aloud: "...Topic Address Inquiry,
+# Resolved, True, Caller Name, Caller Phone, Details, ..."). A pattern
+# looking only for doubled braces missed this entirely.
+#
+# A caller should never hear a literal curly brace spoken at all, in any
+# shape, in any restaurant conversation -- normal spoken prose simply never
+# contains one -- so this flags a paragraph containing even a single "{" or
+# "}" on its own, rather than trying to match any particular narration
+# shape. Broader than either bug above individually, and would have caught
+# both on its own.
+_BRACE_NARRATION = re.compile(r"[{}]")
+
 
 def _is_forbidden(paragraph: str) -> bool:
-    return bool(_CODE_SHAPED.search(paragraph) or _NARRATES_LOGGING.search(paragraph))
+    return bool(
+        _CODE_SHAPED.search(paragraph)
+        or _NARRATES_LOGGING.search(paragraph)
+        or _BRACE_NARRATION.search(paragraph)
+    )
 
 
 class SecondParagraphFilter(FrameProcessor):
