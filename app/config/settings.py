@@ -12,6 +12,10 @@ load_dotenv(override=True)
 
 @dataclass(frozen=True)
 class Settings:
+    # Which client's Restaurant config (app/config/restaurants/) this
+    # deployment/demo runs as — see that package's __init__.py.
+    restaurant_id: str = os.environ.get("RESTAURANT_ID", "spice_route_kitchen")
+
     openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
     openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     openai_tts_voice: str = os.environ.get("OPENAI_TTS_VOICE", "shimmer")

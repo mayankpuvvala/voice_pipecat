@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.config.restaurants.spice_route_kitchen import Restaurant
+from app.config.restaurants import Restaurant
 
 _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 

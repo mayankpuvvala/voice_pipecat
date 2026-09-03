@@ -12,18 +12,7 @@ of this; nothing here should need editing to add those.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class Restaurant:
-    name: str
-    first_message: str
-    end_call_message: str
-    system_prompt: str
-    timezone: str
-    hours: dict[int, list[tuple[str, str]]]
-
+from app.config.restaurants import Restaurant
 
 SPICE_ROUTE_KITCHEN = Restaurant(
     name="Spice Route Kitchen",

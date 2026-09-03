@@ -23,7 +23,7 @@ from loguru import logger
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams
 
-from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN as RESTAURANT
+from app.config.restaurants import ACTIVE_RESTAURANT as RESTAURANT
 from app.pipeline.hours import is_within_hours
 from app.services import sheets_client
 

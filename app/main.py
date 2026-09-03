@@ -41,7 +41,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
 
 from app.admin.routes import register_admin_routes
-from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN
+from app.config.restaurants import ACTIVE_RESTAURANT
 from app.config.settings import settings
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
@@ -66,7 +66,7 @@ pipecat_runner._setup_frontend_routes = lambda app: None
 async def root_status() -> dict:
     return {
         "status": "ok",
-        "service": f"{SPICE_ROUTE_KITCHEN.name} voice agent",
+        "service": f"{ACTIVE_RESTAURANT.name} voice agent",
         "note": "Telephony only, no browser test client — see /admin for call logs.",
         # Railway injects this at runtime; lets us confirm which commit is
         # actually live without dashboard access (see RAILWAY_GIT_COMMIT_SHA
@@ -109,7 +109,7 @@ transport_params = {
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
-    logger.info("Starting bot for {}", SPICE_ROUTE_KITCHEN.name)
+    logger.info("Starting bot for {}", ACTIVE_RESTAURANT.name)
 
     call_session_id = getattr(runner_args, "session_id", None) or ""
     call_data = getattr(runner_args, "call_data", None)
@@ -143,7 +143,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             api_key=settings.openai_api_key,
             settings=OpenAILLMService.Settings(
                 model=settings.openai_model,
-                system_instruction=build_system_prompt(SPICE_ROUTE_KITCHEN),
+                system_instruction=build_system_prompt(ACTIVE_RESTAURANT),
             ),
         )
 
@@ -225,7 +225,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Caller connected")
-        await worker.queue_frames([TTSSpeakFrame(SPICE_ROUTE_KITCHEN.first_message)])
+        await worker.queue_frames([TTSSpeakFrame(ACTIVE_RESTAURANT.first_message)])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
