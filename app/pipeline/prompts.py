@@ -10,12 +10,16 @@ its own block rather than left as one easily-outweighed bullet buried in the
 base prompt's rules list), a redirect for off-topic/personal messages (a live
 call showed the model going silent on pure small talk like "how are you" --
 none of the restaurant's own rules cover that case, since it isn't a real
-restaurant question and isn't the "don't know the answer" case either), the
-current date/time (needed to resolve relative dates like "tomorrow" into an
-exact date for the reservation tools), a hard gate on confirming a
-reservation without calling those tools, and guidance on the two
-logInteraction fields (`drift`, `callConfidence`) that don't exist in the
-original Vapi tool schema.
+restaurant question and isn't the "don't know the answer" case either), a
+guard against confidently answering a mis-transcribed word as if it were a
+real menu item (a live call had the model tell a caller "we don't have a
+dish called world fish" after ASR mangled "what fish is that?" -- the fix
+is to ask the caller to repeat rather than parroting the garbled term
+back), the current date/time (needed to resolve relative dates like
+"tomorrow" into an exact date for the reservation tools), a hard gate on
+confirming a reservation without calling those tools, and guidance on the
+two logInteraction fields (`drift`, `callConfidence`) that don't exist in
+the original Vapi tool schema.
 """
 
 from __future__ import annotations
@@ -101,6 +105,27 @@ a speech. If they keep drifting off-topic afterward, give a short version
 of the same redirect again rather than going quiet or engaging further with
 the off-topic thread — only end the call per the ending rule below if they
 indicate they're actually done."""
+
+
+_UNCLEAR_INPUT_INSTRUCTION = """
+
+# When a transcript names something that doesn't exist
+Phone speech recognition on this call will occasionally render a caller's
+words as a real-sounding but wrong word — confirmed from a real call: right
+after the model listed beer batter fish among the non-veg options, a caller
+asked "What fish is that?" and it came through in a way the model answered
+as a question about a dish called "world fish." The reply — "we don't
+specifically have a dish called world fish, but we do offer beer batter
+fish" — repeated the garbled word straight back to the caller, who then had
+to say "I did not hear you clearly" to get back on track.
+If a transcript names an item, dish, or term that isn't anywhere in your
+facts and doesn't plausibly follow from what you were just discussing,
+don't tell the caller you don't have it — that just hands the mishearing
+back to them and sounds broken. Ask them to repeat instead, e.g. "Sorry,
+could you say that again?" This is especially likely right after you've
+just listed a few items or answered a related question, where the caller
+is almost certainly asking about one of those, not a brand-new word out of
+nowhere."""
 
 
 def _current_time_instruction(restaurant: Restaurant) -> str:
@@ -214,6 +239,7 @@ def build_system_prompt(restaurant: Restaurant) -> str:
         + _LANGUAGE_INSTRUCTION
         + _BREVITY_INSTRUCTION
         + _OFF_TOPIC_INSTRUCTION
+        + _UNCLEAR_INPUT_INSTRUCTION
         + _current_time_instruction(restaurant)
         + _RESERVATION_TOOL_INSTRUCTION
         + _LOGGING_QUALITY_INSTRUCTION
