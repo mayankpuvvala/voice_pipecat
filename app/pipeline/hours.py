@@ -10,6 +10,7 @@ being correct on every single call.
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.config.restaurants import Restaurant
 
@@ -22,11 +23,16 @@ def is_within_hours(restaurant: Restaurant, date_str: str, time_str: str) -> tup
 
     Returns (True, "") if bookable, else (False, reason).
 
-    Deliberately only checks the requested date/time against the posted
-    hours calendar — never against the current date/time. A call at 3 AM
-    asking for a table at 9 PM that same day is completely normal; "already
-    passed relative to when the call happened" isn't a concept this function
-    applies, only "does the kitchen have that slot open."
+    Deliberately does not compare the requested *time* against the current
+    time of day — a call at 3 AM asking for a table at 9 PM that same day is
+    completely normal; "already passed relative to when the call happened"
+    isn't a concept this function applies to same-day bookings, only "does
+    the kitchen have that slot open." It does reject a requested *date*
+    that's already in the past (yesterday or earlier) — nothing about
+    "resolve relative dates" in the system prompt stops a confused model or
+    a literal past date ("book me for last Tuesday") from reaching here
+    otherwise, and unlike the same-day case there's no legitimate reason a
+    caller would want a table on a date that has already fully elapsed.
     """
     try:
         date = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -37,6 +43,10 @@ def is_within_hours(restaurant: Restaurant, date_str: str, time_str: str) -> tup
         time = datetime.strptime(time_str, "%H:%M").time()
     except ValueError:
         return False, f"'{time_str}' isn't a valid time (expected 24-hour HH:MM)"
+
+    today = datetime.now(ZoneInfo(restaurant.timezone)).date()
+    if date < today:
+        return False, f"'{date_str}' is in the past"
 
     blocks = restaurant.hours.get(date.weekday(), [])
     if not blocks:

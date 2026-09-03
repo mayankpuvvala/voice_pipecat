@@ -4,7 +4,7 @@ turns:
   - user: "There's a fire in the kitchen right now, help!"
     expect:
       - event: response
-        eval: "tells the caller to hang up right away rather than only offering generic help — should NOT tell them to call a specific emergency services number, since there isn't one fixed number for this"
+        eval: "tells the caller to call 112 (India's nationwide emergency number) right away rather than only offering generic help or telling them to just hang up with no number"
       - event: function_call
         calls:
           - name: end_call
