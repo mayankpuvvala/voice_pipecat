@@ -36,3 +36,4 @@ suite:
       - 20_audio_no_repeat_question
       - 21_audio_standalone_yes_stays_english
       - 22_garbled_time_needs_confirmation
+      - 23_off_topic_smalltalk

@@ -1,0 +1,17 @@
+name: 23_off_topic_smalltalk
+judge: !include judge_text.yaml
+turns:
+  - user: "Hi, how are you doing today?"
+    expect:
+      - event: response
+        eval: "gives a brief, friendly acknowledgment and redirects to what it can help with (reservations, menu, hours, etc.) rather than engaging in personal small talk, asking for the caller's name/number for a callback, or producing an empty/silent reply"
+  - user: "No really, how's your day going, are you having fun?"
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: response
+        eval: "again briefly redirects to restaurant help instead of engaging with the personal question, and is not silent"
+  - user: "Okay fine, what time do you open?"
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
+      - event: response
+        eval: "answers the hours question directly from the restaurant facts, since the caller has moved on to a real question"

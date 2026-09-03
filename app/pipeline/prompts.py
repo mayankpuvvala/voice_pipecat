@@ -7,11 +7,15 @@ actually respond in kind), a brevity instruction (a live test call came back
 sounding like a form being read aloud — multiple questions stacked into one
 turn, unsolicited extra detail — so this is called out explicitly and given
 its own block rather than left as one easily-outweighed bullet buried in the
-base prompt's rules list), the current date/time (needed to resolve relative
-dates like "tomorrow" into an exact date for the reservation tools), a hard
-gate on confirming a reservation without calling those tools, and guidance on
-the two logInteraction fields (`drift`, `callConfidence`) that don't exist in
-the original Vapi tool schema.
+base prompt's rules list), a redirect for off-topic/personal messages (a live
+call showed the model going silent on pure small talk like "how are you" --
+none of the restaurant's own rules cover that case, since it isn't a real
+restaurant question and isn't the "don't know the answer" case either), the
+current date/time (needed to resolve relative dates like "tomorrow" into an
+exact date for the reservation tools), a hard gate on confirming a
+reservation without calling those tools, and guidance on the two
+logInteraction fields (`drift`, `callConfidence`) that don't exist in the
+original Vapi tool schema.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.config.restaurants.spice_route_kitchen import Restaurant
+from app.config.restaurants import Restaurant
 
 _LANGUAGE_INSTRUCTION = """
 
@@ -75,6 +79,28 @@ as few words as the moment actually needs, one idea per turn.
   facts nobody asked about.
 - If a short answer fully covers it, stop there. Don't pad with extra
   pleasantries or detail just to sound thorough."""
+
+
+_OFF_TOPIC_INSTRUCTION = """
+
+# Off-topic or personal messages
+Some callers drift into small talk or personal questions that have nothing
+to do with the restaurant — "how are you," greeting you by a random name,
+chit-chat, questions about you personally, or anything else unrelated to
+reservations, the menu, hours, location, or the other facts you were given.
+This is different from the "I don't know the answer" rule in the job list
+above, which is for real restaurant questions outside the facts you have —
+there's nothing for the owner to call back about here, so don't take a
+name/number for it.
+Never go silent, and never just answer the personal question as if this
+were a normal conversation. Give one brief, friendly line acknowledging
+them and redirect to what you can actually help with, e.g. "I'm just here
+for the restaurant, but I can help with reservations, the menu, or our
+hours — what can I get started for you?" Keep it to one short sentence, not
+a speech. If they keep drifting off-topic afterward, give a short version
+of the same redirect again rather than going quiet or engaging further with
+the off-topic thread — only end the call per the ending rule below if they
+indicate they're actually done."""
 
 
 def _current_time_instruction(restaurant: Restaurant) -> str:
@@ -187,6 +213,7 @@ def build_system_prompt(restaurant: Restaurant) -> str:
         restaurant.system_prompt
         + _LANGUAGE_INSTRUCTION
         + _BREVITY_INSTRUCTION
+        + _OFF_TOPIC_INSTRUCTION
         + _current_time_instruction(restaurant)
         + _RESERVATION_TOOL_INSTRUCTION
         + _LOGGING_QUALITY_INSTRUCTION
