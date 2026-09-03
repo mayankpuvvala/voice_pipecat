@@ -43,8 +43,15 @@ _ENDING_SIGNAL_PHRASES = (
     "have a great day",
     "talk soon",
     "hang up",
-    "call 112",  # the emergency rule's own wording (see restaurant configs) --
-    "dial 112",  # keep in sync if that instruction's phrasing ever changes
+    # Bare "112" rather than a guessed exact phrase like "call 112" or
+    # "dial 112": confirmed live via the eval suite that the model phrases
+    # this many ways ("by dialing 112", "please call 112 now", "112
+    # immediately") and an exact-substring match missed "dialing 112",
+    # leaving a real emergency reply never nudged toward end_call -- it sat
+    # waiting the full 60s timeout instead of hanging up promptly. "112"
+    # only ever appears in this app's emergency instruction (see restaurant
+    # configs), so the bare number is a safe, phrasing-independent signal.
+    "112",
 )
 
 
