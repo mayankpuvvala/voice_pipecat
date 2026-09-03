@@ -9,8 +9,12 @@ here to "never book outside operating hours" instead of "never skip
 logging."
 
 No seat/order cap is enforced yet, by design at this stage — any request
-inside operating hours is bookable; existing same-day booking count is
-returned for visibility only, not used to reject anything.
+inside operating hours is bookable. check_availability therefore only
+checks hours; it used to also read the whole Bookings sheet for an
+existing-same-day-count that nothing (no prompt instruction, no eval
+scenario) ever consumed — pure latency on the live-call path for a number
+that never changed the answer, so that read was removed. Reintroduce a
+real read here only once there's an actual capacity check to base it on.
 """
 
 from __future__ import annotations
@@ -90,21 +94,7 @@ async def check_availability(
         await params.result_callback({"available": False, "reason": reason})
         return
 
-    try:
-        existing = await asyncio.to_thread(sheets_client.read_rows, _BOOKINGS_SHEET)
-        same_day_count = sum(1 for r in existing if r.get("Date") == date)
-    except Exception:
-        logger.exception("check_availability: failed to read Bookings sheet")
-        # No cap is enforced yet, so a read failure doesn't block booking —
-        # only kitchen hours do (checked above). Still report it happened.
-        await params.result_callback(
-            {"available": True, "reason": "", "existing_bookings_today": None}
-        )
-        return
-
-    await params.result_callback(
-        {"available": True, "reason": "", "existing_bookings_today": same_day_count}
-    )
+    await params.result_callback({"available": True, "reason": ""})
 
 
 async def book_table(

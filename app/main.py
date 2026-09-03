@@ -124,16 +124,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             settings=SarvamSTTService.Settings(
                 model="saaras:v3",
                 language=Language.HI_IN,
-                # Sarvam's streaming API returns no per-transcript confidence
-                # score, so a hallucinated transcript from background noise
-                # can't be filtered after the fact -- it comes back looking
-                # exactly like a real one and gets fed straight to the LLM.
-                # Real call recordings (measured directly, not guessed) show
-                # a consistent gap between ambient noise (roughly -47 to
-                # -60 dBFS) and actual speech (roughly -14 to -36 dBFS);
-                # -40 dB sits in that gap, comfortably above the noise band
-                # while leaving headroom below typical speech level. Left
-                # unset (the default), Sarvam has no volume floor at all.
                 start_speech_volume_threshold=-40.0,
             ),
         )

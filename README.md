@@ -14,10 +14,16 @@ which opens a bidirectional WebSocket ("Media Streams") straight into this
 server — no Daily, no WebRTC, no XML webhook. Pipecat's FastAPI WebSocket
 transport (`pipecat.transports.websocket.fastapi`) speaks that protocol via
 the `ExotelFrameSerializer`, auto-detected from the connection handshake.
-English + Hindi + Telugu (Sarvam STT auto-detects and code-switches; replies
-are read aloud in an English TTS voice for now — see "Deferred" below).
-Single restaurant (Spice Route Kitchen), but the config layout is shaped for
-adding more restaurants later without restructuring.
+STT recognizes English, Hindi, and Telugu speech (Sarvam STT auto-detects
+and code-switches), but Telugu is not a supported *reply* language — the
+system prompt (see `_LANGUAGE_INSTRUCTION` in `app/pipeline/prompts.py`)
+deliberately treats an apparent Telugu transcript as a misheard
+English/Hindi/Hinglish utterance rather than switching into it, since this
+call path only supports replying in English or Hindi/Hinglish and TTS is
+English-voice-only for now (see "Deferred" below).
+One restaurant active per deployment, picked via the `RESTAURANT_ID` env var
+(`app/config/restaurants/`) — currently Spice Route Kitchen and Zero40
+Brewing are configured; add a new client the same way without restructuring.
 
 ## Setup
 
@@ -38,9 +44,14 @@ Env vars needed in `.env`:
   same service account already granted Editor on the sheet for n8n's own
   Sheets credential — no separate sharing step needed.
 - `GOOGLE_SHEET_ID` — the spreadsheet ID from the sheet's URL (the string
-  between `/d/` and `/edit`). The spreadsheet needs two tabs, each with just
-  its header row already in place (see "Reservations & logging" below):
-  `Sheet1` (interaction log) and `Bookings` (reservations).
+  between `/d/` and `/edit`). The spreadsheet needs three tabs, each with
+  just its header row already in place (see "Reservations & logging" below
+  for the exact columns each one needs — `sheets_client.append_row` silently
+  drops any field not in a tab's header row, so a tab missing a column loses
+  that data on every write rather than erroring): `Sheet1` (interaction
+  log), `Bookings` (reservations), and `Recordings` (call recordings/
+  transcripts/summaries — optional at first, `/admin` degrades gracefully
+  if it doesn't exist yet, but recordings won't show up until it does).
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD` — gate for `/admin`. Defaults to
   `admin`/`admin` to match `ai-receptionist`'s local-dev precedent — **change
   this** once deployed off localhost, since that default is not meant to
@@ -52,12 +63,12 @@ No Exotel-specific env vars are needed: the call/stream identifiers
 
 ## Admin
 
-`/admin` (HTTP Basic auth) shows every logged interaction — same columns as
-the sheet (`Timestamp`, `CallDate`, `CallerName`, `CallerPhone`, `Topic`,
-`Resolved`, `Details`, `GuestsCount`, `Drift`, `CallConfidence`), newest
-first. There's no local database in this project (unlike `ai-receptionist`),
-so this reads the Google Sheet live via the Sheets API on every request
-rather than a cached copy — see `app/admin/`.
+`/admin` (HTTP Basic auth) shows one row per call — joining `Sheet1`,
+`Bookings`, and `Recordings` by `CallSessionId` (see
+`app/admin/sheets_reader.py`), not one row per logged interaction. There's
+no local database in this project (unlike `ai-receptionist`), so this reads
+the Google Sheet live via the Sheets API on every request rather than a
+cached copy — see `app/admin/`.
 
 It's registered on Pipecat's own dev-runner FastAPI app (`pipecat.runner.run`
 exports `app` specifically so other modules can add routes before calling
@@ -71,19 +82,22 @@ from this same process — never through n8n, since a live in-call webhook to
 n8n risks dead air if Railway's free tier cold-starts it mid-call:
 
 - `logInteraction` (`app/tools/log_interaction.py`) — appends a row to the
-  `Sheet1` tab: `Timestamp, CallDate, CallerName, CallerPhone, Topic,
-  Resolved, Details, GuestsCount, Drift, CallConfidence`.
+  `Sheet1` tab: `Timestamp, CallDate, CallSessionId, CallerName,
+  CallerPhone, Topic, Resolved, Details, GuestsCount, Drift,
+  CallConfidence`.
 - `check_availability` (`app/tools/reservations.py`) — the model must call
-  this before confirming any reservation. Validates the requested date/time
-  against `SPICE_ROUTE_KITCHEN.hours` in
-  `app/config/restaurants/spice_route_kitchen.py` (see
+  this before confirming any reservation. Validates the requested date
+  isn't in the past and the requested time falls inside the active
+  restaurant's posted hours (`app/config/restaurants/`, checked via
   `app/pipeline/hours.py`) and returns `available: true/false`. No seat cap
-  is enforced yet, by design — every in-hours slot is available; an
-  existing-bookings count is returned for visibility only.
+  is enforced yet, by design — every in-hours, non-past slot is available.
 - `book_table` — only called after `check_availability` returns available.
   Re-validates hours itself (never trusts the model to have checked first)
-  and appends a row to the `Bookings` tab: `Timestamp, BookingId, Date, Time,
-  GuestsCount, CallerName, CallerPhone, Status`.
+  and appends a row to the `Bookings` tab: `Timestamp, BookingId,
+  CallSessionId, Date, Time, GuestsCount, CallerName, CallerPhone, Status`.
+- Call recordings (`app/pipeline/recording.py`) — saved separately at call
+  end, appends a row to the `Recordings` tab: `Timestamp, CallSessionId,
+  CallerPhone, DurationSecs, RecordingURL, Transcript, Summary`.
 
 The system prompt (`app/pipeline/prompts.py`) hard-gates this: the model is
 told never to speak a reservation confirmation without a `booked: true`

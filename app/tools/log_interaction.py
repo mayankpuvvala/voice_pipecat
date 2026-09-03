@@ -34,8 +34,26 @@ _INTERACTIONS_SHEET = "Sheet1"
 # already logged something. In-process cache, not a Sheets read, so it adds
 # no latency to a live call: one process handles a call's full duration, so
 # this doesn't need to survive restarts or be shared across processes.
+#
+# Entries are never deleted when a call ends, only overwritten if that same
+# call_session_id logs again — on a long-running always-on process this
+# would otherwise grow by one small entry per call ever handled, forever.
+# _PRUNE_AFTER_SECS bounds that: an entry this stale can't affect the dedupe
+# window above anyway, so it's dropped opportunistically on the next call's
+# write rather than needing a dedicated call-teardown hook.
 _DEDUPE_WINDOW_SECS = 10.0
+_PRUNE_AFTER_SECS = 3600.0
 _recent_topics: dict[str, tuple[str, float]] = {}
+
+
+def _prune_stale_topics(now_mono: float) -> None:
+    stale = [
+        session_id
+        for session_id, (_, last_seen) in _recent_topics.items()
+        if now_mono - last_seen > _PRUNE_AFTER_SECS
+    ]
+    for session_id in stale:
+        del _recent_topics[session_id]
 
 
 async def log_interaction(
@@ -86,6 +104,7 @@ async def log_interaction(
 
     if call_session_id:
         now_mono = time.monotonic()
+        _prune_stale_topics(now_mono)
         last = _recent_topics.get(call_session_id)
         if last and last[0] == topic and (now_mono - last[1]) < _DEDUPE_WINDOW_SECS:
             logger.debug(
