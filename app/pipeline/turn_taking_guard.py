@@ -16,24 +16,22 @@ lost as dead air). In this case what came out of that continuation wasn't
 a legitimate next question, though — it was the bot just moving on to its
 next planned question without waiting for an answer to the first.
 
-This app's own prompt already asks for exactly one utterance per caller
-turn (_BREVITY_INSTRUCTION: "Ask ONE question at a time... ask, hear the
-answer, ask the next thing"), so there's no case where a second spoken
-utterance before new caller input is actually correct for this app —
-enforcing it structurally costs nothing legitimate. Tracked via the
-LLMContext directly (not frames flowing through this processor, since
-user input travels through a different branch of the pipeline that never
-reaches this position): count the "user" messages in context each time a
-round is about to speak. If that count hasn't grown since the last time
-the bot actually spoke, this round is a second utterance for the same
-caller turn — drop its text. A tool-call-only round that stays silent
-(e.g. a lookup with nothing to say yet) never counts as "spoke," so the
-turn's real first utterance — whenever it arrives — still goes through
-normally; this only blocks a *second* one.
+This guard doesn't try to track *why* a round exists (nudge-originated vs.
+a normal reply+tool-call chain) the way LogInteractionEnforcer's
+`_awaiting_followup`/`_chain_extends` do -- that tracking is inherently
+best-effort, since pipecat's own automatic post-tool-call continuation
+looks identical whether it's a legitimate next sentence or the model just
+continuing unprompted. This guard is the backstop that doesn't need to
+know which case it is: it enforces one plain invariant regardless --
 
-Sits after LogInteractionEnforcer: needs to see whatever that processor
-already decided to let through (including the never-swallowed
-automatic-continuation case this exists to catch), not the raw LLM stream.
+    the bot may speak at most once per caller turn.
+
+A "caller turn" here is identified by `user_turn_id`, a count of committed
+user messages in the shared LLMContext. That count only advances when the
+user aggregator has actually finalized a caller utterance into context --
+it does not advance for VAD noise/false triggers, tool calls, tool
+results, or any of pipecat's internal LLM continuations, which is what
+makes it a valid turn id rather than just an incidental proxy.
 """
 
 from __future__ import annotations
@@ -54,12 +52,18 @@ class OneUtterancePerTurnGuard(FrameProcessor):
     def __init__(self, context: LLMContext, **kwargs) -> None:
         super().__init__(**kwargs)
         self._context = context
-        self._last_spoken_at_user_count = -1
+        self._answered_turn_id = -1
         self._suppress_this_round = False
         self._credited_this_round = False
         self._dropped_text_parts: list[str] = []
 
-    def _user_message_count(self) -> int:
+    def _current_turn_id(self) -> int:
+        """The id of the caller turn currently in progress.
+
+        Derived (not separately stored) from how many user messages the
+        context already holds -- see the module docstring for why that
+        count is a valid turn id rather than just an incidental proxy.
+        """
         return sum(1 for m in self._context.messages if m.get("role") == "user")
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -68,7 +72,7 @@ class OneUtterancePerTurnGuard(FrameProcessor):
         if isinstance(frame, LLMFullResponseStartFrame):
             self._dropped_text_parts = []
             self._credited_this_round = False
-            self._suppress_this_round = self._user_message_count() == self._last_spoken_at_user_count
+            self._suppress_this_round = self._current_turn_id() == self._answered_turn_id
         elif isinstance(frame, LLMTextFrame):
             if self._suppress_this_round:
                 self._dropped_text_parts.append(frame.text)
@@ -82,7 +86,7 @@ class OneUtterancePerTurnGuard(FrameProcessor):
             # still counts -- correctly, since the caller did hear part of
             # an answer for this turn.
             if not self._credited_this_round and frame.text.strip():
-                self._last_spoken_at_user_count = self._user_message_count()
+                self._answered_turn_id = self._current_turn_id()
                 self._credited_this_round = True
         elif isinstance(frame, LLMFullResponseEndFrame):
             if self._suppress_this_round:
