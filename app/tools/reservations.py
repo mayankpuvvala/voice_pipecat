@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime, timezone
 
 from loguru import logger
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams
 
 from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN as RESTAURANT
@@ -27,6 +28,43 @@ from app.pipeline.hours import is_within_hours
 from app.services import sheets_client
 
 _BOOKINGS_SHEET = "Bookings"
+
+
+def _confirmed_since_last_availability_check(context: LLMContext) -> bool:
+    """Whether the caller has spoken since the most recent successful check_availability.
+
+    Structural backup for the prompt's read-back-and-confirm instruction —
+    confirmed live from a real call that prompt wording alone isn't
+    reliable here: a caller said "8 PM," Sarvam STT transcribed it as "at
+    ATM," and the model booked a guessed time (not even one it had itself
+    considered) without ever giving the caller a chance to catch it. A
+    caller's own reply is the only actual evidence they heard the read-back
+    and had a chance to correct it, so this checks for a real "user"
+    message in context after the last check_availability succeeded —
+    not just that the model *said* something, which it might do without
+    waiting for a reply.
+    """
+    messages = context.messages
+    tool_call_names: dict[str, str] = {}
+    last_available_check_index: int | None = None
+
+    for index, message in enumerate(messages):
+        if message.get("role") == "assistant":
+            for tool_call in message.get("tool_calls") or []:
+                function = tool_call.get("function") or {}
+                tool_call_names[tool_call.get("id")] = function.get("name")
+        elif message.get("role") == "tool":
+            name = tool_call_names.get(message.get("tool_call_id"))
+            content = (message.get("content") or "").replace(" ", "")
+            if name == "check_availability" and '"available":true' in content:
+                last_available_check_index = index
+
+    if last_available_check_index is None:
+        return False
+
+    return any(
+        message.get("role") == "user" for message in messages[last_available_check_index + 1 :]
+    )
 
 
 async def check_availability(
@@ -80,10 +118,11 @@ async def book_table(
     """Write a confirmed reservation to the real booking sheet.
 
     Only call this after check_availability has just returned available: true
-    for this same date/time. Never speak a confirmation to the caller until
-    this tool has returned booked: true — if it returns booked: false, do not
-    tell them the table is set; explain the reason and offer to take a message
-    instead.
+    for this same date/time, AND after you've read the date/time/guest count
+    back to the caller and they've explicitly said yes. Never speak a
+    confirmation to the caller until this tool has returned booked: true — if
+    it returns booked: false, do not tell them the table is set; explain the
+    reason and offer to take a message instead.
 
     Args:
         date: The reservation date as YYYY-MM-DD.
@@ -97,6 +136,19 @@ async def book_table(
     if not caller_name.strip():
         await params.result_callback(
             {"booked": False, "reason": "caller name is required — ask for it before booking"}
+        )
+        return
+
+    if not _confirmed_since_last_availability_check(params.context):
+        await params.result_callback(
+            {
+                "booked": False,
+                "reason": (
+                    "not yet confirmed with the caller — read the date, time, "
+                    "and guest count back to them and wait for an explicit yes "
+                    "before calling book_table"
+                ),
+            }
         )
         return
 

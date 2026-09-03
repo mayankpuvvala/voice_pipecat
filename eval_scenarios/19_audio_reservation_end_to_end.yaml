@@ -15,7 +15,11 @@ turns:
         calls:
           - name: check_availability
             args: { date: "2026-09-02" }
-  - expect:
+      - event: response
+        eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
+  - user: "Yes, that's right."
+    send_after: { event: llm_response, delay_ms: 800 }
+    expect:
       - event: function_call
         calls:
           - name: book_table

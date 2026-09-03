@@ -1,0 +1,15 @@
+name: 22_garbled_time_needs_confirmation
+# Repro for a real call where the caller said "8 PM" and Sarvam STT
+# transcribed it as "at ATM" -- the model silently guessed a time (3 PM,
+# not even one of the two candidates it had itself considered) and booked
+# it without ever giving the caller a chance to catch the mistake. The
+# fix isn't a specific STT parsing rule (any STT will occasionally mangle
+# a time) -- it's that a booking-critical detail must be read back and
+# confirmed before book_table runs, so a caller can correct a mishearing
+# before it's actually booked.
+judge: !include judge_text.yaml
+turns:
+  - user: "I'd like a reservation for 4 people, name ZZ-EVALTEST Priya, day after tomorrow at ATM."
+    expect:
+      - event: response
+        eval: "asks the caller to clarify or confirm the time, and does not say a table is already booked"

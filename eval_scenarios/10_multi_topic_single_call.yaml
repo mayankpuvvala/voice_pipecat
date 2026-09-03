@@ -12,7 +12,11 @@ turns:
       - event: function_call
         calls:
           - name: check_availability
-  - expect:
+      - event: response
+        eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
+  - user: "Yes, that's right."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
       - event: function_call
         calls:
           - name: book_table

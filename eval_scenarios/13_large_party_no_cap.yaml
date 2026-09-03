@@ -7,7 +7,11 @@ turns:
         calls:
           - name: check_availability
             args: { guests_count: "20" }
-  - expect:
+      - event: response
+        eval: "reads back the date, time, and guest count of 20 and asks the caller to confirm before booking, without rejecting the size"
+  - user: "Yes, please."
+    send_after: { event: llm_response, delay_ms: 500 }
+    expect:
       - event: function_call
         calls:
           - name: book_table
