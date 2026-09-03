@@ -66,24 +66,23 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-# camelCase or snake_case immediately (no space) followed by "(" -- e.g.
-# "logInteraction(", "check_availability(", "bookTable(" -- the shape of
-# every narrated code call seen so far, regardless of the exact casing the
-# model used for the tool's name. Deliberately NOT just "word(" with no
-# case/underscore requirement: confirmed live that a plain English
-# parenthetical like "Old Timer (Witbier)" matches that naively and gets
-# a real menu item dropped as if it were code -- camelCase/snake_case
-# essentially never occurs in ordinary spoken English, so requiring one
-# keeps this narrow to what it's actually meant to catch.
 _CODE_SHAPED = re.compile(r"\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[a-z][a-z0-9]*_[A-Za-z0-9_]+)\(")
 
-# Plain-English mentions of the act of logging/noting/saving/recording --
-# the prose equivalent of the same forbidden narration
-# (_LOGGING_TIMING_INSTRUCTION explicitly bans both forms).
+# Two shapes confirmed live via the eval suite, neither caught by the
+# first-person-verb pattern alone: a filler word breaking up the verb
+# phrase ("I'll [...] just log our conversation" -- the repeated group
+# below also accepts a bare "just" so the required verb is still found
+# right after it), and a gerund/label narration with no first-person verb
+# at all ("Logging interaction: topic \"...\", resolved true, details
+# \"...\"") -- doesn't start with "I'll"/"let me" and isn't code-shaped
+# (no identifier immediately followed by "("), so it reached TTS
+# unfiltered. Added as its own alternative since it has no leading
+# pronoun/verb to anchor the first pattern on.
 _NARRATES_LOGGING = re.compile(
     r"\b(i'?ll|let me|going to|i'm going to)\s+"
-    r"(go ahead and\s+)?"
-    r"(log|note|jot|record|save)\b",
+    r"(go ahead and\s+|just\s+)*"
+    r"(log|note|jot|record|save)\b"
+    r"|\blog(?:ging|ged)?\s+(the\s+|our\s+|this\s+)?(interaction|conversation)\b",
     re.IGNORECASE,
 )
 
