@@ -1,5 +1,6 @@
-# Eval suite manifest — see README section in this directory (or the top-level
-# session-learnings file, "local testing without a phone") for how this works.
+# Eval suite manifest — see the top-level README's "Eval suite" section for
+# how to run this (invocation command, required env vars, known fixture
+# staleness to expect).
 #
 # The suite spawns app/main.py fresh (via `-t eval`) for each scenario, so
 # there's no manual bot-restart-between-runs step. Scenarios still exercise

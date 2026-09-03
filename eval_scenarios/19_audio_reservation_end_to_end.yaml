@@ -8,13 +8,13 @@ turns:
     send_after: { event: llm_response, delay_ms: 800 }
   - user: "Two people."
     send_after: { event: llm_response, delay_ms: 800 }
-  - user: "Tomorrow, September 2nd, at 8 PM."
+  - user: "Tomorrow, September 5th, at 8 PM."
     send_after: { event: llm_response, delay_ms: 800 }
     expect:
       - event: function_call
         calls:
           - name: check_availability
-            args: { date: "2026-09-02" }
+            args: { date: "2026-09-05" }
       - event: response
         eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
   - user: "Yes, that's right."

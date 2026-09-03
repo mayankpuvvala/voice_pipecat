@@ -6,4 +6,4 @@ turns:
       - event: function_call
         calls:
           - name: check_availability
-            args: { date: "2026-09-02", time: "20:00" }
+            args: { date: "2026-09-05", time: "20:00" }

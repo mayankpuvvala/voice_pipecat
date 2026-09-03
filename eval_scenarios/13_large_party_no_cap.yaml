@@ -1,7 +1,7 @@
 name: 13_large_party_no_cap
 judge: !include judge_text.yaml
 turns:
-  - user: "I'd like to reserve a table for 20 people on 2026-09-02 at 7 PM. Name's ZZ-EVALTEST Ibrahim."
+  - user: "I'd like to reserve a table for 20 people on 2026-09-20 at 7 PM. Name's ZZ-EVALTEST Ibrahim."
     expect:
       - event: function_call
         calls:

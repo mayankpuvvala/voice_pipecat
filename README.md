@@ -150,6 +150,61 @@ when using one of them. In the Docker image this is controlled by the
 `TELEPHONY_TRANSPORT` env var (defaults to `exotel`) instead of `-t`
 directly — see `Dockerfile`.
 
+## Eval suite
+
+`eval_scenarios/manifest.yaml` lists 23 behavioral scenarios (text and
+audio) run against a fresh `app/main.py -t eval` bot per scenario, judged by
+`gpt-4o-mini`. This costs real OpenAI/Sarvam API calls and writes real rows
+to the configured Google Sheet — every scenario's caller name/phone is
+prefixed `ZZ-EVALTEST` so they're easy to find and delete afterward.
+
+```bash
+export OPENAI_API_KEY=...   # the harness's own judge client reads this
+                              # directly from the shell env, NOT from .env —
+                              # it never imports app.config.settings, so
+                              # load_dotenv() never runs for it. The spawned
+                              # bot subprocess loads .env itself and doesn't
+                              # need this exported separately.
+PYTHONUTF8=1 PYTHONIOENCODING=utf-8 \
+  python -m pipecat.cli.main eval suite eval_scenarios/manifest.yaml
+```
+
+Two things confirmed the hard way, not guessed:
+
+- **Use `python -m pipecat.cli.main`, not the installed `pipecat`/`pc`
+  console-script wrapper.** The wrapper's `sys.path[0]` is its own install
+  location, not this repo — so the 6 audio scenarios (which load
+  `eval_scenarios.services` via pipecat's `factory:` mechanism) fail with
+  `ModuleNotFoundError: No module named 'eval_scenarios'` when run through
+  it. Module-mode (`-m`) always puts the current directory on `sys.path[0]`,
+  which fixes this.
+- **`PYTHONUTF8=1 PYTHONIOENCODING=utf-8` are required on Windows.** Without
+  them, the harness's own progress output crashes with
+  `UnicodeEncodeError: 'charmap' codec can't encode character '✗'` the
+  moment a scenario fails — the same reason the Dockerfile sets both.
+
+**Known fixture staleness, not a bot bug if you see these fail:**
+
+- A handful of scenarios (`03`, `10`, `12`, `13`, `19`) hardcode an absolute
+  reservation date. These necessarily rot as real time passes them by —
+  the eval YAML format has no templating for "tomorrow," so there's no way
+  to keep them evergreen short of hand-bumping the dates periodically (or
+  building a preprocessing step that does it). If one of these fails on a
+  date/past-date complaint, check today's date against the hardcoded one
+  before assuming a regression.
+- `01_hours_question` and `04_reservation_outside_hours` assert Spice Route
+  Kitchen-specific facts (e.g. "closed on Mondays"). They'll fail if
+  `RESTAURANT_ID` isn't `spice_route_kitchen` when the suite runs — set it
+  explicitly for a full-suite run rather than trusting whatever `.env`
+  happens to have active locally.
+- In text-modality scenarios, the `response`/`llm_response` event observes
+  the model's **raw, pre-`SecondParagraphFilter` output** — not what
+  actually reaches TTS (see `pipecat/evals/harness.py`'s own event-taxonomy
+  docstring: `tts_response` is audio-modality only). A scenario asserting
+  on caller-facing cleanliness can fail here even when a real caller would
+  never hear the offending text — cross-check against the raw `aggregate`
+  in the scenario's `.eval.log` before treating it as a live bug.
+
 ## What's ported vs. what's new
 
 - `app/config/restaurants/spice_route_kitchen.py` — the restaurant facts and

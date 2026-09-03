@@ -6,7 +6,7 @@ turns:
       - event: function_call
         calls:
           - name: log_interaction
-  - user: "Also, can I book a table for 2026-09-02 at 12:30 PM for two? Name is ZZ-EVALTEST Divya."
+  - user: "Also, can I book a table for 2026-09-20 at 12:30 PM for two? Name is ZZ-EVALTEST Divya."
     send_after: { event: llm_response, delay_ms: 500 }
     expect:
       - event: function_call
