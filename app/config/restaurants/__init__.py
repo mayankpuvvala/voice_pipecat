@@ -19,6 +19,7 @@ from app.config.settings import settings
 @dataclass(frozen=True)
 class Restaurant:
     name: str
+    bot_name: str
     first_message: str
     end_call_message: str
     system_prompt: str

@@ -38,10 +38,18 @@ def _message_text(content: Any) -> str:
     return ""
 
 
-def build_transcript(context: LLMContext) -> str:
-    """Render user/assistant turns as "Caller:"/"Meera:" lines. Skips
+def build_transcript(context: LLMContext, bot_name: str) -> str:
+    """Render user/assistant turns as "Caller:"/"{bot_name}:" lines. Skips
     developer (our own logging-enforcer nudges) and tool-result messages —
-    those aren't part of what was actually said on the call."""
+    those aren't part of what was actually said on the call.
+
+    bot_name is a required parameter, not read from ACTIVE_RESTAURANT
+    directly here, so this stays testable/reusable independent of which
+    restaurant happens to be active in a given process — the hardcoded
+    "Meera" this replaced was wrong for every restaurant except Spice Route
+    Kitchen (confirmed live: this environment runs Zero40, whose bot is
+    "Riya", so every transcript was mislabeling the assistant's own lines).
+    """
     lines: list[str] = []
     for msg in context.messages:
         role = msg.get("role")
@@ -50,7 +58,7 @@ def build_transcript(context: LLMContext) -> str:
         text = _message_text(msg.get("content")).strip()
         if not text:
             continue
-        speaker = "Caller" if role == "user" else "Meera"
+        speaker = "Caller" if role == "user" else bot_name
         lines.append(f"{speaker}: {text}")
     return "\n".join(lines)
 

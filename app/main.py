@@ -167,7 +167,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     call_state = {"transcript": ""}
 
     def capture_transcript() -> None:
-        call_state["transcript"] = build_transcript(context)
+        call_state["transcript"] = build_transcript(context, ACTIVE_RESTAURANT.bot_name)
 
     pipeline = Pipeline(
         [

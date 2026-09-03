@@ -16,6 +16,7 @@ from app.config.restaurants import Restaurant
 
 SPICE_ROUTE_KITCHEN = Restaurant(
     name="Spice Route Kitchen",
+    bot_name="Meera",
     first_message=("Thanks for calling Spice Route Kitchen, this is Meera — how can I help?"),
     end_call_message="Thanks so much for calling Spice Route Kitchen — talk soon!",
     timezone="Asia/Kolkata",

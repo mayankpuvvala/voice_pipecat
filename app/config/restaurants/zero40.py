@@ -29,6 +29,7 @@ from app.config.restaurants import Restaurant
 
 ZERO40_BREWING = Restaurant(
     name="Zero40 Brewing",
+    bot_name="Riya",
     first_message=(
         "Thanks for calling Zero40 Brewing, this is Riya — how can I help?"
     ),
