@@ -20,9 +20,11 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
+from loguru import logger
 
 from app.admin.auth import require_admin
 from app.admin.sheets_reader import fetch_calls
+from app.config.restaurants import ACTIVE_RESTAURANT
 
 _IST = ZoneInfo("Asia/Kolkata")
 
@@ -45,7 +47,7 @@ _CONFIDENCE_BADGES = {
 }
 
 _COLUMNS = [
-    "Call Time", "Caller", "Phone", "Topic", "Summary",
+    "Call Time", "Caller", "Phone", "Topic", "Summary", "Outcome",
     "Transcript", "Recording", "Reservation", "Confidence", "Escalation",
 ]
 
@@ -76,6 +78,21 @@ def _categorize_topics(topics: list[str]) -> list[str]:
     return sorted(matched)
 
 
+def _outcome_html(call: dict[str, Any]) -> str:
+    """Whether the caller's need was handled directly vs. needs the owner to
+    follow up, plus the specifics logInteraction recorded for the owner —
+    both already written to Sheet1 on every call, just not surfaced before."""
+    badge = (
+        '<span class="badge badge-red">⚠ Follow-up needed</span>'
+        if call["needs_followup"]
+        else '<span class="badge badge-green">✓ Resolved</span>'
+    )
+    details = "; ".join(call["details"])
+    if not details:
+        return badge
+    return f'{badge}<br><span class="muted">{escape(details)}</span>'
+
+
 def _reservation_text(reservation: dict[str, Any] | None) -> str:
     if not reservation:
         return "—"
@@ -85,7 +102,7 @@ def _reservation_text(reservation: dict[str, Any] | None) -> str:
     return f"{guests} guests · {date} {time}"
 
 
-def _call_row_html(call: dict[str, Any], idx: int) -> str:
+def _call_row_html(call: dict[str, Any]) -> str:
     date_str, time_str = _format_datetime(call["timestamp"])
     caller_name = escape(call["caller_name"] or "—")
     caller_phone = escape(call["caller_phone"] or "—")
@@ -97,6 +114,7 @@ def _call_row_html(call: dict[str, Any], idx: int) -> str:
     )
 
     summary = escape(call["summary"]) if call["summary"] else "—"
+    outcome_html = _outcome_html(call)
 
     transcript = call["transcript"]
     if transcript:
@@ -133,6 +151,7 @@ def _call_row_html(call: dict[str, Any], idx: int) -> str:
     <td class="nowrap">{caller_phone}</td>
     <td>{topic_html}</td>
     <td class="summary-cell">{summary}</td>
+    <td class="summary-cell">{outcome_html}</td>
     <td>{transcript_html}</td>
     <td>{recording_html}</td>
     <td class="nowrap">{reservation_html}</td>
@@ -147,23 +166,22 @@ def register_admin_routes(app: FastAPI) -> None:
         try:
             calls = fetch_calls()
             error: str | None = None
-        except Exception as exc:  # noqa: BLE001 - show the error on the page, don't 500
+        except Exception:  # noqa: BLE001 - show a generic message, don't leak internals or 500
             calls = []
-            error = str(exc)
+            error = "Could not load call data right now — try refreshing in a moment."
+            logger.exception("admin_page: fetch_calls() failed")
 
         header_html = "".join(f"<th>{col}</th>" for col in _COLUMNS)
-        rows_html = "".join(_call_row_html(c, i) for i, c in enumerate(calls)) or (
+        rows_html = "".join(_call_row_html(c) for c in calls) or (
             f"<tr><td colspan='{len(_COLUMNS)}'>No calls logged yet.</td></tr>"
         )
-        error_html = (
-            f"<p class='error'>Could not load the sheet: {escape(error)}</p>" if error else ""
-        )
+        error_html = f"<p class='error'>{escape(error)}</p>" if error else ""
 
         html = f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Spice Route Kitchen — Call Log</title>
+<title>{escape(ACTIVE_RESTAURANT.name)} — Call Log</title>
 <style>
   :root {{
     --border: #e2e2e2;
@@ -246,7 +264,7 @@ def register_admin_routes(app: FastAPI) -> None:
 </style>
 </head>
 <body>
-  <h2>Spice Route Kitchen — Call Log</h2>
+  <h2>{escape(ACTIVE_RESTAURANT.name)} — Call Log</h2>
   <p class="meta">{len(calls)} call(s) logged, newest first. Reads live from the Google Sheet on every request — no caching.</p>
   {error_html}
   <div class="table-wrap">

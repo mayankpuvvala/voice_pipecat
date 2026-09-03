@@ -13,6 +13,7 @@ from typing import Any
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from loguru import logger
 
 from app.config.settings import settings
 
@@ -52,6 +53,18 @@ def read_rows(sheet_name: str) -> list[dict[str, Any]]:
     return [dict(zip(header, row)) for row in padded_rows]
 
 
+def _read_rows_safe(sheet_name: str) -> list[dict[str, Any]]:
+    """Like read_rows, but a missing/misnamed tab degrades that tab's data
+    to empty instead of failing the whole admin page — a deployment that's
+    only set up Sheet1 + Bookings so far should still see call/booking data
+    even before a Recordings tab exists."""
+    try:
+        return read_rows(sheet_name)
+    except Exception:
+        logger.exception("fetch_calls: failed to read '{}' sheet tab", sheet_name)
+        return []
+
+
 def _new_call(session_id: str) -> dict[str, Any]:
     return {
         "call_session_id": session_id,
@@ -61,6 +74,8 @@ def _new_call(session_id: str) -> dict[str, Any]:
         "topics": [],
         "escalated": False,
         "confidence_rank": 0,
+        "needs_followup": False,
+        "details": [],
         "reservation": None,
         "recording_url": "",
         "duration_secs": "",
@@ -77,9 +92,9 @@ def fetch_calls() -> list[dict[str, Any]]:
     a single "" bucket and will look like one jumbled call; that's a known
     limitation for a handful of legacy rows, not worth special-casing.
     """
-    interactions = read_rows("Sheet1")
-    bookings = read_rows("Bookings")
-    recordings = read_rows("Recordings")
+    interactions = _read_rows_safe("Sheet1")
+    bookings = _read_rows_safe("Bookings")
+    recordings = _read_rows_safe("Recordings")
 
     calls: dict[str, dict[str, Any]] = {}
 
@@ -98,6 +113,11 @@ def fetch_calls() -> list[dict[str, Any]]:
         topic = row.get("Topic", "").strip()
         if topic:
             call["topics"].append(topic)
+        detail = row.get("Details", "").strip()
+        if detail:
+            call["details"].append(detail)
+        if str(row.get("Resolved", "")).strip().lower() == "false":
+            call["needs_followup"] = True
         if str(row.get("Drift", "")).strip().lower() == "true":
             call["escalated"] = True
         rank = _CONFIDENCE_RANK.get(str(row.get("CallConfidence", "")).strip().lower(), 0)
