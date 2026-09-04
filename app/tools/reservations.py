@@ -71,6 +71,34 @@ def _confirmed_since_last_availability_check(context: LLMContext) -> bool:
     )
 
 
+def book_table_succeeded_this_call(context: LLMContext) -> bool:
+    """Whether book_table has returned booked: true anywhere in this call.
+
+    Not underscore-prefixed -- imported from end_call.py's own structural
+    guard against a fabricated booking confirmation (see that module's
+    docstring): confirmed live that a model, refused by end_call's
+    spoken-confirmation gate, can respond by narrating "you're all set"
+    without ever having actually called book_table successfully. Same
+    scanning approach as _confirmed_since_last_availability_check above,
+    just checking for the tool's own success signal instead.
+    """
+    messages = context.messages
+    tool_call_names: dict[str, str] = {}
+
+    for message in messages:
+        if message.get("role") == "assistant":
+            for tool_call in message.get("tool_calls") or []:
+                function = tool_call.get("function") or {}
+                tool_call_names[tool_call.get("id")] = function.get("name")
+        elif message.get("role") == "tool":
+            name = tool_call_names.get(message.get("tool_call_id"))
+            content = (message.get("content") or "").replace(" ", "")
+            if name == "book_table" and '"booked":true' in content:
+                return True
+
+    return False
+
+
 async def check_availability(
     params: FunctionCallParams,
     date: str,

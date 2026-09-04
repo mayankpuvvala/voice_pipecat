@@ -56,6 +56,8 @@ class OneUtterancePerTurnGuard(FrameProcessor):
         self._suppress_this_round = False
         self._credited_this_round = False
         self._dropped_text_parts: list[str] = []
+        self._spoken_text_turn_id = -1
+        self._spoken_text_parts: list[str] = []
 
     def _current_turn_id(self) -> int:
         """The id of the caller turn currently in progress.
@@ -80,6 +82,22 @@ class OneUtterancePerTurnGuard(FrameProcessor):
         """
         return self._answered_turn_id == self._current_turn_id()
 
+    def spoken_text_this_turn(self) -> str:
+        """Everything actually forwarded to the caller so far, across every
+        round of the current turn's response transaction.
+
+        Exposed for end_call.py's reservation-confirmation guard: confirmed
+        live that a model refused by `has_spoken_this_turn()` above can
+        respond by narrating a fabricated booking confirmation ("You're all
+        set, Vikram!... table for two...") instead of actually calling
+        book_table -- a caller could be told a table is booked when it never
+        was. Checking the real spoken text against the real tool result is
+        the only way to catch that; a boolean "something was said" isn't
+        enough."""
+        if self._spoken_text_turn_id != self._current_turn_id():
+            return ""
+        return "".join(self._spoken_text_parts)
+
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 
@@ -91,6 +109,11 @@ class OneUtterancePerTurnGuard(FrameProcessor):
             if self._suppress_this_round:
                 self._dropped_text_parts.append(frame.text)
                 return
+            current_turn_id = self._current_turn_id()
+            if self._spoken_text_turn_id != current_turn_id:
+                self._spoken_text_turn_id = current_turn_id
+                self._spoken_text_parts = []
+            self._spoken_text_parts.append(frame.text)
             # Credit the moment real text is actually forwarded, not at
             # round-end: an interruption can cancel a round before its
             # LLMFullResponseEndFrame ever reaches this processor, and a
@@ -100,7 +123,7 @@ class OneUtterancePerTurnGuard(FrameProcessor):
             # still counts -- correctly, since the caller did hear part of
             # an answer for this turn.
             if not self._credited_this_round and frame.text.strip():
-                self._answered_turn_id = self._current_turn_id()
+                self._answered_turn_id = current_turn_id
                 self._credited_this_round = True
         elif isinstance(frame, LLMFullResponseEndFrame):
             if self._suppress_this_round:

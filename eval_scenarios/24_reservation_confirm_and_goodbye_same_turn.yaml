@@ -20,12 +20,15 @@ turns:
         eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
   - user: "Yes, that's right — that's everything, thanks so much, bye!"
     send_after: { event: llm_response, delay_ms: 500 }
-    # book_table, THEN the spoken confirmation, THEN log_interaction and
-    # end_call -- see 10_multi_topic_single_call.yaml for why: confirmed
-    # live that book_table and log_interaction land in separate rounds
-    # either side of the spoken confirmation text, not both before it, so
-    # an expect: waiting for both function calls before checking for a
-    # response missed the real confirmation that had already gone by.
+    # book_table, THEN the spoken confirmation, THEN end_call -- see
+    # 10_multi_topic_single_call.yaml for why: confirmed live that waiting
+    # for a tool call before checking for a response can miss a real
+    # confirmation that already went by. log_interaction is deliberately
+    # NOT asserted at all -- confirmed live its position relative to the
+    # spoken confirmation isn't consistent run to run (sometimes before it,
+    # sometimes after), so pinning it anywhere caused false fails on
+    # otherwise-correct flows. end_call is what this regression test
+    # actually exists to check (see the module comment above).
     expect:
       - event: function_call
         calls:
@@ -35,5 +38,4 @@ turns:
         eval: "confirms the table is booked and says goodbye to the caller"
       - event: function_call
         calls:
-          - name: log_interaction
           - name: end_call
