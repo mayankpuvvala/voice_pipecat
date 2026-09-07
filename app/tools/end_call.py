@@ -1,31 +1,18 @@
 """The `end_call` tool: hangs up once the conversation is actually over.
 
-Without this, a call just sits connected after a "goodbye" exchange until
-the caller hangs up or the platform's own idle timeout kicks in. Queues an
-EndWorkerFrame — pipecat flushes whatever's still queued (the bot's own
-farewell reply, mid-flight) before actually closing the connection, so this
-never cuts the bot off mid-sentence.
+Queues an EndWorkerFrame — pipecat flushes any already-queued farewell
+reply before closing the connection, so this never cuts the bot off
+mid-sentence.
 
-_END_CALL_INSTRUCTION in prompts.py already tells the model never to call
-this before its own goodbye has been spoken — but that's prompt-only, and
-was confirmed live to not hold 100% of the time: a real eval run had the
-model call book_table -> logInteraction -> end_call in one response with
-ZERO spoken text anywhere in the sequence, hanging up on a caller who'd
-just confirmed a reservation with no idea whether it was actually booked.
-Same lesson as book_table's own _confirmed_since_last_availability_check
-gate (reservations.py) -- prompt wording alone isn't structurally
-enforceable, so this checks turn_taking_guard's own record of whether
-anything has actually reached the caller this turn before allowing the
-call to actually end.
-
-A second, worse pattern showed up re-verifying that fix: refused by the
-gate above, the model responded by *narrating a fabricated booking
-confirmation* ("You're all set, Vikram!... table for two...") instead of
-actually calling book_table — reproduced live twice. A caller told their
-table is booked when it never was is a worse outcome than the silent
-hangup this file was originally built to prevent, so this also checks the
-actual spoken text against book_table's own real result before letting the
-call end, not just "was something said."
+Prompt wording alone doesn't reliably stop the model from ending calls
+wrong (confirmed live twice), so this enforces two gates structurally via
+turn_taking_guard:
+1. Refuse if nothing has been spoken to the caller this turn yet (a real
+   run called book_table -> logInteraction -> end_call with zero spoken
+   text, hanging up with the caller unsure if they had a table).
+2. Refuse if the spoken text claims a booking that book_table never
+   actually confirmed (the model narrated a fake "you're all set"
+   instead of calling book_table — worse than the silent hangup above).
 """
 
 from __future__ import annotations
@@ -38,12 +25,8 @@ from pipecat.services.llm_service import FunctionCallParams
 
 from app.tools.reservations import book_table_succeeded_this_call
 
-# Deliberately over-triggers rather than under-triggers: the failure mode on
-# a false positive is a wasted refusal-and-retry (mildly annoying, the model
-# just tries again), while the failure mode on a false negative is a caller
-# told they have a table that doesn't exist. Covers the exact phrasings
-# confirmed live ("Your table is confirmed...", "it's all set!", "You're all
-# set, Vikram!") plus the obvious neighbors.
+# Deliberately over-triggers: a false positive just costs a retry, a false
+# negative tells a caller they have a table that doesn't exist.
 _CLAIMS_BOOKING_CONFIRMED = re.compile(
     r"\b(it'?s all set|you'?re all set|"
     r"table(?:'s| is)? (?:confirmed|booked|(?:all )?set|held|ready)|"
@@ -112,9 +95,8 @@ async def end_call(params: FunctionCallParams) -> None:
             )
             return
 
-    # A bot-initiated close doesn't fire on_client_disconnected (the
-    # transport only raises that for a caller-initiated close), so the
-    # transcript has to be captured here instead of relying on that handler.
+    # on_client_disconnected only fires for a caller-initiated close, so a
+    # bot-initiated one has to capture the transcript here instead.
     capture_transcript = app_resources.get("capture_transcript")
     if capture_transcript is not None:
         capture_transcript()
