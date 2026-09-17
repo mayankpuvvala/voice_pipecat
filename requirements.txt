@@ -1,5 +1,7 @@
-pipecat-ai[openai,silero,websocket,sarvam,runner]
+pipecat-ai[openai,silero,websocket,sarvam,runner,tracing]
+opentelemetry-exporter-otlp-proto-http
 python-dotenv
+python-multipart
 httpx
 loguru
 google-api-python-client

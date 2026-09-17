@@ -9,6 +9,14 @@ production target (configured as the Voicebot Applet in Exotel's App
 Bazaar); the others exist so testing/dev can use a free-trial or
 pay-as-you-go number while Exotel/TRAI setup is still in progress. See
 README.md for the call path from Jio → Exotel → this server.
+
+Vobiz is also wired up (`/answer` + `/hangup` below) independently of `-t`:
+its WebSocket protocol is wire-compatible with Plivo's, so it needs no CLI
+transport flag of its own — a Vobiz call auto-detects as "plivo" and gets
+picked up by `_create_vobiz_transport()` in `bot()` regardless of which
+`-t` value the process was started with. Point a Vobiz Application's
+"Primary answer URL" at `<this server>/answer` and "Hangup URL" at
+`<this server>/hangup`; it can run alongside Exotel on the same deployment.
 """
 
 from __future__ import annotations
@@ -16,7 +24,10 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from urllib.parse import quote
 
+from fastapi import Request
+from fastapi.responses import Response
 from loguru import logger
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -29,15 +40,16 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.runner.types import RunnerArguments
-from pipecat.runner.utils import create_transport
+from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
+from pipecat.runner.utils import create_transport, parse_telephony_websocket
+from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.evals.transport import EvalTransportParams
 from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport
-from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 from pipecat.workers.runner import WorkerRunner
 
 from app.admin.routes import register_admin_routes
@@ -47,6 +59,7 @@ from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
 from app.pipeline.recording import save_call_recording
 from app.pipeline.second_paragraph_filter import SecondParagraphFilter
+from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
 from app.services.twilio_client import lookup_caller_number
@@ -76,6 +89,50 @@ async def root_status() -> dict:
 
 
 register_admin_routes(runner_app)
+
+
+@runner_app.post("/answer", include_in_schema=False)
+async def vobiz_answer(request: Request) -> Response:
+    """Vobiz's primary answer URL: return XML pointing it at our WS stream.
+
+    Vobiz's ``<Stream>`` protocol is Plivo's Audio Streaming API — same XML
+    attributes, same playAudio/clearAudio/media JSON shape (confirmed against
+    github.com/vobiz-ai/Vobiz-Python-Voice-API-Example) — but its handshake
+    doesn't carry the caller's number, so we thread it through as a query
+    param instead of relying on pipecat's provider-detected call_data. See
+    `bot()` below for how the stream is actually picked up.
+    """
+    form = await request.form()
+    caller = str(form.get("From", "") or "")
+    called = str(form.get("To", "") or "")
+    ws_url = f"wss://{request.headers.get('host')}/ws?from={quote(caller)}&to={quote(called)}"
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        '<Stream bidirectional="true" keepCallAlive="false" '
+        f'contentType="audio/x-mulaw;rate=8000">{ws_url}</Stream>'
+        "</Response>"
+    )
+    return Response(content=xml, media_type="application/xml")
+
+
+@runner_app.post("/hangup", include_in_schema=False)
+async def vobiz_hangup(request: Request) -> Response:
+    """Vobiz's hangup notification. keepCallAlive="false" already ends the
+    call when we close the WebSocket, so this just logs for visibility."""
+    form = await request.form()
+    logger.info(
+        "Vobiz call ended: call_uuid={} duration={} cause={}",
+        form.get("CallUUID"),
+        form.get("Duration"),
+        form.get("HangupCause"),
+    )
+    return Response(content="OK", media_type="text/plain")
+
+
+# Once per process, not per call — a second setup_tracing() call can't
+# override the global TracerProvider the first one already installed.
+_TRACING_ENABLED = setup_call_tracing()
 
 
 @runner_app.on_event("startup")
@@ -200,6 +257,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        enable_tracing=_TRACING_ENABLED,
+        conversation_id=call_session_id or None,
         app_resources={
             "call_session_id": call_session_id,
             "caller_phone": caller_phone,
@@ -227,8 +286,45 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     await runner.run()
 
 
+def _create_vobiz_transport(runner_args: WebSocketRunnerArguments, call_data) -> BaseTransport:
+    """Build the transport for a Vobiz call by hand.
+
+    pipecat's create_transport() auto-detects Vobiz's stream as "plivo" (the
+    wire protocols match) and would build a PlivoFrameSerializer with
+    auto_hang_up=True, which raises unless real PLIVO_AUTH_ID/PLIVO_AUTH_TOKEN
+    creds are set — this app has no Plivo account, so that always fails. We
+    don't need Plivo's REST hangup call anyway: our /answer XML sets
+    keepCallAlive="false", so Vobiz ends the call as soon as we close this
+    WebSocket (EndFrame does that already, same as the Exotel/Twilio paths).
+    """
+    query = runner_args.websocket.query_params
+    call_data.from_number = query.get("from") or call_data.from_number
+    call_data.to_number = query.get("to") or call_data.to_number
+    runner_args.call_data = call_data
+
+    params = FastAPIWebsocketParams(audio_in_enabled=True, audio_out_enabled=True)
+    params.add_wav_header = False
+    params.serializer = PlivoFrameSerializer(
+        stream_id=call_data.stream_id,
+        call_id=call_data.call_id,
+        params=PlivoFrameSerializer.InputParams(auto_hang_up=False),
+    )
+    return FastAPIWebsocketTransport(websocket=runner_args.websocket, params=params)
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Entry point the Pipecat dev runner looks for."""
+    if isinstance(runner_args, WebSocketRunnerArguments) and runner_args.transport_type != "websocket":
+        # Peek the handshake ourselves so Vobiz calls (which auto-detect as
+        # "plivo") can be routed to _create_vobiz_transport before
+        # create_transport() gets a chance to build a real PlivoFrameSerializer.
+        detected_type, call_data = await parse_telephony_websocket(runner_args.websocket)
+        if detected_type == "plivo":
+            runner_args.transport_type = detected_type
+            transport = _create_vobiz_transport(runner_args, call_data)
+            await run_bot(transport, runner_args)
+            return
+
     transport = await create_transport(runner_args, transport_params)
     await run_bot(transport, runner_args)
 
