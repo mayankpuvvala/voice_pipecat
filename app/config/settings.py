@@ -43,5 +43,12 @@ class Settings:
     admin_username: str = os.environ.get("ADMIN_USERNAME", "")
     admin_password: str = os.environ.get("ADMIN_PASSWORD", "")
 
+    # Call tracing (STT/LLM/TTS latency, turn/interruption spans) via
+    # Langfuse's OTel endpoint — see app/pipeline/tracing.py. Unset either
+    # key and tracing just stays off; region defaults to Langfuse's EU host.
+    langfuse_public_key: str = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+    langfuse_secret_key: str = os.environ.get("LANGFUSE_SECRET_KEY", "")
+    langfuse_host: str = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
 
 settings = Settings()
