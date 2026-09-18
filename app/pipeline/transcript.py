@@ -44,11 +44,10 @@ def build_transcript(context: LLMContext, bot_name: str) -> str:
     those aren't part of what was actually said on the call.
 
     bot_name is a required parameter, not read from ACTIVE_RESTAURANT
-    directly here, so this stays testable/reusable independent of which
-    restaurant happens to be active in a given process — the hardcoded
-    "Meera" this replaced was wrong for every restaurant except Spice Route
-    Kitchen (confirmed live: this environment runs Zero40, whose bot is
-    "Riya", so every transcript was mislabeling the assistant's own lines).
+    directly, so this stays testable/reusable independent of which
+    restaurant is active — the hardcoded "Meera" this replaced mislabeled
+    every restaurant except Spice Route Kitchen (confirmed live: this
+    environment runs Zero40's "Riya").
     """
     lines: list[str] = []
     for msg in context.messages:
@@ -76,7 +75,9 @@ async def generate_call_summary(transcript: str) -> str:
                 {"role": "system", "content": _SUMMARY_PROMPT},
                 {"role": "user", "content": transcript},
             ],
-            max_tokens=120,
+            # max_tokens (not max_completion_tokens) 400s on gpt-5.6-luna --
+            # confirmed live 2026-09-19, see TROUBLESHOOTING.md.
+            max_completion_tokens=120,
         )
         return (response.choices[0].message.content or "").strip()
     except Exception:

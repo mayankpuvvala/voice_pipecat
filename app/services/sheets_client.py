@@ -29,16 +29,28 @@ from app.config.settings import settings
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# Built once, reused for the life of the process — not per call. Rebuilding
+# this on every check_availability/book_table/log_interaction call meant a
+# fresh service-account OAuth token exchange (a real network round trip to
+# oauth2.googleapis.com) plus a new API client on every single tool call,
+# even though check_availability/book_table sit directly on the live call's
+# critical path. `Credentials` refreshes its own access token as needed, so
+# one long-lived instance is the intended usage, not a staleness risk.
+_service = None
+
 
 def _client():
-    info = {
-        "type": "service_account",
-        "client_email": settings.google_service_account_email,
-        "private_key": settings.google_service_account_private_key,
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }
-    creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
-    return build("sheets", "v4", credentials=creds, cache_discovery=False)
+    global _service
+    if _service is None:
+        info = {
+            "type": "service_account",
+            "client_email": settings.google_service_account_email,
+            "private_key": settings.google_service_account_private_key,
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
+        _service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    return _service
 
 
 def append_row(sheet_name: str, row: dict[str, Any]) -> None:
@@ -68,11 +80,9 @@ def append_row(sheet_name: str, row: dict[str, Any]) -> None:
     service.spreadsheets().values().append(
         spreadsheetId=settings.google_sheet_id,
         range=f"{sheet_name}!A1",
-        # RAW, not USER_ENTERED: USER_ENTERED parses each cell the way Sheets
-        # parses manual keyboard entry, which silently mangles data we need
-        # byte-for-byte — confirmed live, writing caller_phone="0000000000"
-        # came back read as "0" (Sheets treats it as the number 0 and drops
-        # the leading zeros). RAW stores every value as literal text.
+        # RAW, not USER_ENTERED: the latter parses cells like manual keyboard
+        # entry, silently mangling data we need byte-for-byte — confirmed
+        # live, caller_phone="0000000000" came back read as "0".
         valueInputOption="RAW",
         insertDataOption="INSERT_ROWS",
         body={"values": [values]},

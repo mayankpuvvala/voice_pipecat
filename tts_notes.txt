@@ -3,7 +3,7 @@ RUMIK TTS INTEGRATION — ITERATION NOTES (2026-09-18)
 
 DECISION
 ---------------------------------------------------------------------
-Switched the bot's TTS from OpenAI (gpt-4o-mini-tts, "shimmer") to
+Switched the bot's TTS from OpenAI (gpt-4o-mini-tts, "echo") to
 Rumik Silk (mulberry model, "adam" voice) — app/main.py _build_tts(),
 app/services/rumik_tts.py. Reason: this bot's calls are Hindi/English
 code-mixed (Sarvam STT already runs in "codemix" mode); Rumik's

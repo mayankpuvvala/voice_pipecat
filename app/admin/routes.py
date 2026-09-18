@@ -52,16 +52,29 @@ _COLUMNS = [
 ]
 
 
-def _format_datetime(iso_ts: str) -> tuple[str, str]:
-    """Returns (date as dd:mm:yy, time as hh:mm:ss) in IST, or ("—", "—")."""
+def _format_datetime(iso_ts: str) -> tuple[str, str, str]:
+    """Returns (date as dd:mm:yy, time as hh:mm:ss, date as yyyy-mm-dd for
+    filtering) in IST, or ("—", "—", "")."""
     if not iso_ts:
-        return "—", "—"
+        return "—", "—", ""
     try:
         dt = datetime.fromisoformat(iso_ts)
     except ValueError:
-        return "—", "—"
+        return "—", "—", ""
     local = dt.astimezone(_IST)
-    return local.strftime("%d:%m:%y"), local.strftime("%H:%M:%S")
+    return local.strftime("%d:%m:%y"), local.strftime("%H:%M:%S"), local.strftime("%Y-%m-%d")
+
+
+def _format_duration(duration_secs: Any) -> str:
+    """Returns "1min 42secs" style, or "—" if unknown/unparseable."""
+    if duration_secs in (None, ""):
+        return "—"
+    try:
+        total = int(round(float(duration_secs)))
+    except (TypeError, ValueError):
+        return "—"
+    minutes, seconds = divmod(max(total, 0), 60)
+    return f"{minutes}min {seconds}secs"
 
 
 def _categorize_topics(topics: list[str]) -> list[str]:
@@ -103,7 +116,10 @@ def _reservation_text(reservation: dict[str, Any] | None) -> str:
 
 
 def _call_row_html(call: dict[str, Any]) -> str:
-    date_str, time_str = _format_datetime(call["timestamp"])
+    date_str, time_str, iso_date = _format_datetime(call["timestamp"])
+    duration_str = _format_duration(call.get("duration_secs"))
+    outcome_key = "followup" if call["needs_followup"] else "resolved"
+    confidence_key = call["confidence_rank"]
     caller_name = escape(call["caller_name"] or "—")
     caller_phone = escape(call["caller_phone"] or "—")
 
@@ -145,8 +161,8 @@ def _call_row_html(call: dict[str, Any]) -> str:
         else '<span class="badge badge-neutral">—</span>'
     )
 
-    return f"""<tr>
-    <td class="nowrap">{date_str}<br><span class="muted">{time_str}</span></td>
+    return f"""<tr data-date="{iso_date}" data-outcome="{outcome_key}" data-confidence="{confidence_key}">
+    <td class="nowrap">{duration_str}<br><span class="muted">{date_str} {time_str}</span></td>
     <td>{caller_name}</td>
     <td class="nowrap">{caller_phone}</td>
     <td>{topic_html}</td>
@@ -218,6 +234,23 @@ def register_admin_routes(app: FastAPI) -> None:
   .muted {{ color: var(--text-muted); font-size: 0.78rem; }}
   .summary-cell {{ max-width: 260px; }}
 
+  .filters {{
+    display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+    background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    padding: 12px 16px; margin-bottom: 1.25rem; font-size: 0.85rem;
+  }}
+  .filter-group {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+  .filter-group label {{ display: flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }}
+  .filter-label {{ font-weight: 600; color: #374151; margin-right: 2px; }}
+  .filters input[type="date"] {{
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 0.85rem;
+  }}
+  .filters button {{
+    border: 1px solid var(--border); background: #f5f6f8; border-radius: 6px;
+    padding: 5px 10px; font-size: 0.8rem; cursor: pointer;
+  }}
+  .filters button:hover {{ background: #eceef1; }}
+
   .badge {{
     display: inline-block;
     padding: 2px 9px;
@@ -265,10 +298,32 @@ def register_admin_routes(app: FastAPI) -> None:
 </head>
 <body>
   <h2>{escape(ACTIVE_RESTAURANT.name)} — Call Log</h2>
-  <p class="meta">{len(calls)} call(s) logged, newest first. Reads live from the Google Sheet on every request — no caching.</p>
+  <p class="meta">{len(calls)} call(s) logged, newest first. Data may be up to 20s stale (short cache to avoid re-reading the Sheet on every refresh).</p>
   {error_html}
+
+  <div class="filters">
+    <div class="filter-group">
+      <label>From <input type="date" id="filter-from"></label>
+      <label>To <input type="date" id="filter-to"></label>
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Outcome</span>
+      <label><input type="checkbox" class="f-outcome" value="resolved" checked> Resolved</label>
+      <label><input type="checkbox" class="f-outcome" value="followup" checked> Follow-up needed</label>
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Confidence</span>
+      <label><input type="checkbox" class="f-confidence" value="1" checked> High</label>
+      <label><input type="checkbox" class="f-confidence" value="2" checked> Medium</label>
+      <label><input type="checkbox" class="f-confidence" value="3" checked> Low</label>
+      <label><input type="checkbox" class="f-confidence" value="0" checked> Unrated</label>
+    </div>
+    <button type="button" id="filter-clear">Clear filters</button>
+    <span class="muted" id="filter-count"></span>
+  </div>
+
   <div class="table-wrap">
-    <table>
+    <table id="call-table">
       <thead><tr>{header_html}</tr></thead>
       <tbody>{rows_html}</tbody>
     </table>
@@ -296,6 +351,55 @@ def register_admin_routes(app: FastAPI) -> None:
     document.addEventListener('keydown', function(e) {{
       if (e.key === 'Escape') closeModal();
     }});
+
+    (function() {{
+      var fromEl = document.getElementById('filter-from');
+      var toEl = document.getElementById('filter-to');
+      var countEl = document.getElementById('filter-count');
+      var rows = Array.prototype.slice.call(
+        document.querySelectorAll('#call-table tbody tr[data-date]')
+      );
+
+      function checkedValues(selector) {{
+        return Array.prototype.slice.call(document.querySelectorAll(selector + ':checked'))
+          .map(function(el) {{ return el.value; }});
+      }}
+
+      function applyFilters() {{
+        var from = fromEl.value;
+        var to = toEl.value;
+        var outcomes = checkedValues('.f-outcome');
+        var confidences = checkedValues('.f-confidence');
+        var shown = 0;
+        rows.forEach(function(row) {{
+          var date = row.getAttribute('data-date');
+          var ok = true;
+          if (date) {{
+            if (from && date < from) ok = false;
+            if (to && date > to) ok = false;
+          }}
+          if (outcomes.indexOf(row.getAttribute('data-outcome')) === -1) ok = false;
+          if (confidences.indexOf(row.getAttribute('data-confidence')) === -1) ok = false;
+          row.style.display = ok ? '' : 'none';
+          if (ok) shown++;
+        }});
+        countEl.textContent = shown + ' of ' + rows.length + ' shown';
+      }}
+
+      document.querySelectorAll('.f-outcome, .f-confidence').forEach(function(el) {{
+        el.addEventListener('change', applyFilters);
+      }});
+      fromEl.addEventListener('change', applyFilters);
+      toEl.addEventListener('change', applyFilters);
+      document.getElementById('filter-clear').addEventListener('click', function() {{
+        fromEl.value = '';
+        toEl.value = '';
+        document.querySelectorAll('.f-outcome, .f-confidence').forEach(function(el) {{ el.checked = true; }});
+        applyFilters();
+      }});
+
+      if (rows.length) applyFilters();
+    }})();
   </script>
 </body>
 </html>"""

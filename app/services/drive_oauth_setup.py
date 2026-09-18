@@ -7,11 +7,19 @@ GOOGLE_OAUTH_REFRESH_TOKEN. Requires GOOGLE_OAUTH_CLIENT_ID and
 GOOGLE_OAUTH_CLIENT_SECRET to already be set — see drive_oauth_client.py's
 docstring for how to create those.
 
-Only needs to be run once. The refresh token doesn't expire under normal
-use (only if explicitly revoked, unused for 6 months, or the OAuth consent
-screen is still in "Testing" mode and the 7-day testing-token limit applies
-— if uploads start failing with an auth error after a week, that's the
-likely cause: publish the OAuth consent screen, or re-run this).
+Onboarding another restaurant onto the same machine/.env? Set RESTAURANT_ID
+to its id before running this — the printed variable name comes out
+suffixed for that restaurant (see app/config/settings.py's _restaurant_env),
+so its credentials can sit alongside another restaurant's without
+overwriting them. The Google account you consent as must already be listed
+under that GCP project's OAuth consent screen -> Test users, or Google
+blocks the sign-in with "Access blocked" before you can even pick it.
+
+Only needs to be run once per restaurant. The refresh token doesn't expire
+under normal use (only if explicitly revoked, unused for 6 months, or the
+OAuth consent screen is still in "Testing" mode and the 7-day testing-token
+limit applies — if uploads start failing with an auth error after a week,
+that's the likely cause: publish the OAuth consent screen, or re-run this).
 """
 
 from __future__ import annotations
@@ -46,8 +54,9 @@ def main() -> None:
     flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
     creds = flow.run_local_server(port=0)
 
+    var_name = f"GOOGLE_OAUTH_REFRESH_TOKEN_{settings.restaurant_id}"
     print("\nConsent granted. Set this in .env and Railway's variables:\n")
-    print(f"GOOGLE_OAUTH_REFRESH_TOKEN={creds.refresh_token}")
+    print(f"{var_name}={creds.refresh_token}")
 
 
 if __name__ == "__main__":

@@ -1,55 +1,28 @@
 """Drops narrated logging/tool-call text from a reply without eating the rest.
 
-Originally built to catch narrated tool-call syntax reaching the caller
-(_LOGGING_TIMING_INSTRUCTION in prompts.py tells the model never to write a
-function name or argument syntax into its reply, but that's a prompt-only
-instruction that doesn't reliably hold -- the same lesson
-logging_enforcer.py already learned for logInteraction itself). Confirmed
-live via the eval suite: a reply came back as real spoken content, a blank
-line, then a literal narrated call --
+The prompt-only instruction not to narrate logInteraction
+(_LOGGING_TIMING_INSTRUCTION in prompts.py) doesn't reliably hold -- confirmed
+live in both code-shaped ("logInteraction({...});") and plain-English ("I'll
+log that for you.") forms reaching real TTS audio.
 
-    "Yes, we have a small lot behind the building... \n\nlogInteraction({
-      topic: "parking availability", ...
-    });"
+An earlier version dropped everything after a round's first "\n\n", on the
+theory that no legitimate reply needs a real paragraph break. That was
+wrong, confirmed live: a caller asked about the beer list, and the
+legitimate multi-paragraph, bulleted answer that followed the first break
+got silently dropped along with the trailing narration -- almost nothing
+reached TTS. A menu question is exactly the kind of thing that legitimately
+produces multiple paragraphs.
 
--- and the `logInteraction({...})` fragment reached TTS intact.
+So each "\n\n"-separated paragraph is now evaluated on its own merits: a
+paragraph is dropped only if it looks like narrated tool-call syntax or a
+plain-English logging mention; every other paragraph -- bulleted lists
+included -- is forwarded. The common case (no "\n\n" at all) streams
+through with no added delay; only once a break appears does the rest of the
+round get buffered and forwarded paragraph-by-paragraph as each completes.
 
-A second, real call then showed the same "\n\n"-separated shape carrying a
-different kind of unwanted content -- not code, just a stray extra
-sentence the model was never supposed to say:
-
-    "Our address is 142 Residency Road... \n\n I'll log that for you."
-
-with "I'll log that for you." reaching TTS -- a plain-English narration of
-the same forbidden logging-mention, just not code-shaped.
-
-An earlier version of this filter reacted by dropping *everything* after
-the first "\n\n" in a round, unconditionally, on the theory that no
-legitimate reply needs a real paragraph break. That was wrong, confirmed
-live: a caller asked "what beers do you have," and the model's answer was
-"...along with pizzas and fast food.\n\nFor beers, we brew several
-in-house varieties, including:\n\n- Old Timer (Witbier)\n- ...". The whole
-beer list -- the actual answer to the question -- came after that first
-blank line and got silently dropped along with the trailing "I'll log
-this" narration, so almost nothing reached TTS. A caller asking about a
-menu is exactly the kind of question that legitimately produces a
-multi-paragraph, bulleted answer.
-
-So this now evaluates each "\n\n"-separated paragraph in a round on its
-own merits instead of accept/reject-ing the whole remainder as one unit:
-a paragraph is dropped only if it looks like narrated tool-call syntax or
-a plain-English mention of the act of logging/noting/saving/recording;
-every other paragraph -- including a bulleted list with blank lines
-between items -- is forwarded. The common case (no "\n\n" at all) still
-streams through immediately with no added delay; only once a break
-appears does the rest of the round get buffered (to evaluate complete
-paragraphs, not partial ones) and forwarded paragraph-by-paragraph as
-each one completes.
-
-Sits after LogInteractionEnforcer, not before: that processor's own
-positioning (see its docstring) is tied to seeing the raw LLM frame stream
-directly, and this filter only needs whatever text LogInteractionEnforcer
-already decided to let through.
+Sits after LogInteractionEnforcer -- that processor needs the raw LLM frame
+stream directly (see its own docstring); this filter only needs whatever
+text it already decided to let through.
 """
 
 from __future__ import annotations
@@ -68,16 +41,11 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 _CODE_SHAPED = re.compile(r"\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[a-z][a-z0-9]*_[A-Za-z0-9_]+)\(")
 
-# Two shapes confirmed live via the eval suite, neither caught by the
-# first-person-verb pattern alone: a filler word breaking up the verb
-# phrase ("I'll [...] just log our conversation" -- the repeated group
-# below also accepts a bare "just" so the required verb is still found
-# right after it), and a gerund/label narration with no first-person verb
-# at all ("Logging interaction: topic \"...\", resolved true, details
-# \"...\"") -- doesn't start with "I'll"/"let me" and isn't code-shaped
-# (no identifier immediately followed by "("), so it reached TTS
-# unfiltered. Added as its own alternative since it has no leading
-# pronoun/verb to anchor the first pattern on.
+# Two shapes confirmed live, neither caught by a plain first-person-verb
+# match: a filler word splitting the verb phrase ("I'll just log our
+# conversation"), and a gerund/label narration with no leading pronoun at
+# all ("Logging interaction: topic ..., resolved true, ...") -- the second
+# alternative below exists for that leading-pronoun-free case.
 _NARRATES_LOGGING = re.compile(
     r"\b(i'?ll|let me|going to|i'm going to)\s+"
     r"(go ahead and\s+|just\s+)*"
@@ -86,33 +54,12 @@ _NARRATES_LOGGING = re.compile(
     re.IGNORECASE,
 )
 
-# A third shape, confirmed live via a real eval run (verified against the
-# actual TTS audio, not just raw text -- the harness's own audio-modality
-# judge transcribed the bot's spoken reply as ending in "...Log Interaction."):
-# the model narrated the tool call in template-brace syntax --
-# "...anything else? \n\n{{ \n\nlog_interaction}}" -- instead of the
-# functionName(...) shape _CODE_SHAPED looks for, so no identifier here is
-# ever followed by "(". Worse, the stray "\n\n" landed *inside* the braces,
-# which splits this one narration across three separate paragraphs under
-# this file's own paragraph-at-a-time evaluation ("...anything else? ",
-# "{{ ", "log_interaction}}") -- so a pattern requiring both "{{" and "}}"
-# in the same paragraph would still miss it.
-#
-# A re-run to verify that fix caught a fourth shape in the very next live
-# call: the model narrated the *entire raw tool-call arguments object*,
-# single-brace JSON, not doubled -- '...How can I assist you further?
-# \n\n{"topic":"address inquiry","resolved":true,...,"call_confidence":
-# "high"}' -- confirmed reaching real TTS audio the same way (transcribed
-# spoken output read the JSON keys/values aloud: "...Topic Address Inquiry,
-# Resolved, True, Caller Name, Caller Phone, Details, ..."). A pattern
-# looking only for doubled braces missed this entirely.
-#
-# A caller should never hear a literal curly brace spoken at all, in any
-# shape, in any restaurant conversation -- normal spoken prose simply never
-# contains one -- so this flags a paragraph containing even a single "{" or
-# "}" on its own, rather than trying to match any particular narration
-# shape. Broader than either bug above individually, and would have caught
-# both on its own.
+# Two more narration shapes confirmed live (verified against actual TTS
+# audio, not just raw text): template-brace syntax ("{{ \n\nlog_interaction}}",
+# with the stray "\n\n" splitting it across paragraphs) and raw single-brace
+# JSON tool args ('{"topic":"...",...}'). Rather than matching either
+# specific shape, just flag any "{" or "}" -- normal spoken prose never
+# contains a literal brace, so this is broader and catches both at once.
 _BRACE_NARRATION = re.compile(r"[{}]")
 
 

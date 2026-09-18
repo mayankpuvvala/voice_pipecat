@@ -23,16 +23,14 @@ def is_within_hours(restaurant: Restaurant, date_str: str, time_str: str) -> tup
 
     Returns (True, "") if bookable, else (False, reason).
 
-    Deliberately does not compare the requested *time* against the current
-    time of day — a call at 3 AM asking for a table at 9 PM that same day is
-    completely normal; "already passed relative to when the call happened"
-    isn't a concept this function applies to same-day bookings, only "does
-    the kitchen have that slot open." It does reject a requested *date*
-    that's already in the past (yesterday or earlier) — nothing about
-    "resolve relative dates" in the system prompt stops a confused model or
-    a literal past date ("book me for last Tuesday") from reaching here
-    otherwise, and unlike the same-day case there's no legitimate reason a
-    caller would want a table on a date that has already fully elapsed.
+    Deliberately doesn't compare the requested *time* against the current
+    time of day — a 3 AM call asking for 9 PM that same day is normal;
+    "already passed" doesn't apply to same-day bookings, only "is the
+    kitchen open then." It does reject a requested *date* already in the
+    past (yesterday or earlier) — nothing stops a confused model or a
+    literal past date ("last Tuesday") from reaching here otherwise, and
+    unlike same-day, there's no legitimate reason to want an already-elapsed
+    date.
     """
     try:
         date = datetime.strptime(date_str, "%Y-%m-%d").date()

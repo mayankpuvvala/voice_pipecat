@@ -43,28 +43,33 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport, parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
+from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.evals.transport import EvalTransportParams
 from pipecat.services.sarvam.stt import SarvamSTTService
+from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
-from pipecat.transports.base_transport import BaseTransport
+from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 from pipecat.workers.runner import WorkerRunner
 
 from app.admin.routes import register_admin_routes
 from app.config.restaurants import ACTIVE_RESTAURANT
 from app.config.settings import settings
+from app.live_client import register_live_test_client
+from app.pipeline.call_health import CallHealthMonitor
+from app.pipeline.dynamic_prompt import DynamicPromptInjector
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
 from app.pipeline.recording import save_call_recording
 from app.pipeline.second_paragraph_filter import SecondParagraphFilter
 from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
+from app.pipeline.tts_language_switcher import TTSLanguageSwitcher
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
-from app.services.rumik_tts import RumikTTSService
+from app.services.resilient_stt import ResilientSarvamSTTService
 from app.services.twilio_client import lookup_caller_number
 from app.tools.end_call import end_call
-from app.tools.log_interaction import log_interaction
 from app.tools.reservations import book_table, check_availability
 
 # pipecat.runnroutes before calling main() — see that module's docstring.
@@ -80,7 +85,7 @@ async def root_status() -> dict:
     return {
         "status": "ok",
         "service": f"{ACTIVE_RESTAURANT.name} voice agent",
-        "note": "Telephony only, no browser test client — see /admin for call logs.",
+        "note": "See /admin for call logs, /live for a browser test call.",
         # Railway injects this at runtime; lets us confirm which commit is
         # actually live without dashboard access (see RAILWAY_GIT_COMMIT_SHA
         # in Railway's docs).
@@ -89,6 +94,7 @@ async def root_status() -> dict:
 
 
 register_admin_routes(runner_app)
+register_live_test_client(runner_app)
 
 
 @runner_app.post("/answer", include_in_schema=False)
@@ -162,6 +168,14 @@ transport_params = {
         audio_in_enabled=True,
         audio_out_enabled=True,
     ),
+    # Browser test client at /live (app/live_client.py) -- talks straight to
+    # pipecat's own POST /api/offer, which create_transport() routes here via
+    # SmallWebRTCRunnerArguments. Requires the `webrtc` extra (aiortc) to be
+    # installed, see requirements.txt.
+    "webrtc": lambda: TransportParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+    ),
 }
 
 
@@ -174,8 +188,32 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     if not caller_phone and getattr(runner_args, "transport_type", None) == "twilio" and call_data:
         caller_phone = await lookup_caller_number(getattr(call_data, "call_id", "") or "")
 
-    def _build_stt() -> SarvamSTTService:
-        return SarvamSTTService(
+    worker_handle = WorkerHandle()
+    # logInteraction is deliberately NOT a live tool: the model isn't asked to
+    # call it (see _LOGGING_TIMING_INSTRUCTION in prompts.py) — every reply
+    # calling it inline turned out to force a silent tool-call-only round
+    # before the actual spoken reply, doubling LLM round-trip latency on
+    # nearly every turn (confirmed via Langfuse trace 2026-09-19, still
+    # happening on the current model, not just older ones). LogInteractionEnforcer's
+    # background backfill logs every reply instead, off the live call's critical path.
+    context = LLMContext(tools=[check_availability, book_table, end_call])
+    call_state = {"transcript": ""}
+
+    def capture_transcript() -> None:
+        call_state["transcript"] = build_transcript(context, ACTIVE_RESTAURANT.bot_name)
+
+    # One per call — see its own module docstring for how this fits into
+    # the STT/LLM/TTS retry/fallback layering.
+    call_health = CallHealthMonitor(
+        worker_handle=worker_handle,
+        capture_transcript=capture_transcript,
+        call_session_id=call_session_id,
+        caller_phone=caller_phone,
+        restaurant_name=ACTIVE_RESTAURANT.name,
+    )
+
+    def _build_stt() -> ResilientSarvamSTTService:
+        return ResilientSarvamSTTService(
             api_key=settings.sarvam_api_key,
             mode="codemix",
             settings=SarvamSTTService.Settings(
@@ -183,33 +221,96 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 language=Language.HI_IN,
                 start_speech_volume_threshold=-40.0,
             ),
+            on_connect_exhausted=lambda reason: call_health.degrade_with_apology("stt", reason),
         )
 
     def _build_llm() -> OpenAILLMService:
+        # Groq (Llama on LPU inference hardware) in place of OpenAI for the
+        # conversational LLM when a key is configured — cuts the 1-3s
+        # gpt-4o-mini completion time that's paid on every turn. GroqLLMService
+        # is a thin OpenAILLMService subclass (different base_url/model, same
+        # settings shape, same tool-calling), so retry_on_timeout, the
+        # isinstance(..., OpenAILLMService) check in on_pipeline_error below,
+        # and everything else here needs no further changes either way.
+        # openai_api_key/openai_model stay OpenAI-only regardless — see their
+        # comment in app/config/settings.py.
+        if settings.groq_api_key and settings.groq_enabled:
+            return GroqLLMService(
+                api_key=settings.groq_api_key,
+                retry_on_timeout=True,
+                settings=GroqLLMService.Settings(
+                    model=settings.groq_model,
+                    system_instruction=build_system_prompt(ACTIVE_RESTAURANT),
+                ),
+            )
         return OpenAILLMService(
             api_key=settings.openai_api_key,
+            # One extra retry on top of the OpenAI SDK's own default retries
+            # for transient/5xx errors — see BaseOpenAILLMService.get_chat_
+            # completions. A failure surviving both becomes a non-fatal
+            # ErrorFrame; on_pipeline_error below is what reacts to it.
+            retry_on_timeout=True,
             settings=OpenAILLMService.Settings(
                 model=settings.openai_model,
                 system_instruction=build_system_prompt(ACTIVE_RESTAURANT),
+                # gpt-5.6-luna 400s on /v1/chat/completions with function
+                # tools attached unless reasoning_effort is explicit --
+                # confirmed live 2026-09-19, see TROUBLESHOOTING.md's
+                # "Conversational LLM model choice" section. "none" matches
+                # this bot's actual usage (no multi-step reasoning needed
+                # for check_availability/book_table/log_interaction calls).
+                # Harmless passthrough if OPENAI_MODEL is ever overridden
+                # back to a non-reasoning model like gpt-5.4-nano -- but if
+                # switching to a different reasoning-capable model, re-check
+                # this still applies.
+                extra={"reasoning_effort": "none"},
             ),
         )
 
-    def _build_tts() -> RumikTTSService:
-        # mulberry: the only Rumik model with male voice presets, and it
-        # natively handles Hindi/English/code-mixed text in one request —
-        # see app/services/rumik_tts.py. "table"-style loanword pronunciation
-        # was tested across several spellings (2026-09-18) and plain English
-        # spelling read fine; no special-casing needed for now.
-        return RumikTTSService(
-            api_key=settings.rumik_api_key,
-            speaker="adam",
-            description=(
-                "a male, 30s, indian accent voice, normal pitch, smooth timbre, "
-                "conversational pacing, professional register, like a restaurant host"
+    def _build_tts() -> SarvamTTSService:
+        # Trying bulbul:v3 in place of Rumik (2026-09-18): it streams audio
+        # over its own WebSocket as each chunk is synthesized (see
+        # SarvamTTSService._receive_messages), instead of Rumik's one-shot
+        # HTTP call that waits for the whole utterance before anything plays
+        # — see app/services/rumik_tts.py, still here if this doesn't pan out.
+        # "shubh" is bulbul:v3's default speaker; listen via /live and swap
+        # for another name in SarvamTTSSpeakerV3 if it doesn't fit the persona.
+        #
+        # No retry/OpenAI-fallback wrapper here yet (unlike Rumik's) — a
+        # failure still ends the call cleanly via on_pipeline_error below,
+        # just without a second TTS vendor to fall back to first.
+        return SarvamTTSService(
+            api_key=settings.sarvam_api_key,
+            settings=SarvamTTSService.Settings(
+                model="bulbul:v3",
+                # Starting locale only -- app/pipeline/tts_language_switcher.py
+                # flips this per reply to match whatever language the model
+                # actually replied in. Was hardcoded to Language.HI_IN for the
+                # whole call: confirmed live that pinned every reply's
+                # pronunciation to Hindi phonetics even for plain English
+                # replies (guest counts/numbers came out Hindi-accented) no
+                # matter what language the caller actually used.
+                language=Language.EN_IN,
+                # Default is 50 -- for a reply like "Sure! What name should I
+                # put the reservation under?" (52 chars) that's the entire
+                # sentence buffered before any audio starts, which throws
+                # away most of the streaming benefit over Rumik. Lower value
+                # means Sarvam starts synthesizing after fewer words, at some
+                # risk to prosody smoothness -- listen via /live and raise
+                # this back up if sentences sound choppy.
+                #
+                # 30 is Sarvam's actual server-side floor, not just a
+                # sensible-sounding number: anything below it makes the
+                # server reject the *entire* config message with a generic
+                # 422 "Input parameters has to be a valid dictionary" (no
+                # mention of which field), which kills the TTS connection
+                # on every reconnect attempt and silently ends the call.
+                # Confirmed 2026-09-18 by sending the raw config directly
+                # to wss://api.sarvam.ai/text-to-speech/ws — 15 reproduces
+                # the error every time, 30 does not.
+                min_buffer_size=30,
             ),
         )
-
-    context = LLMContext(tools=[log_interaction, check_availability, book_table, end_call])
 
     def _build_user_aggregators():
         return LLMContextAggregatorPair(
@@ -224,26 +325,32 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         asyncio.to_thread(_build_user_aggregators),
     )
 
-    worker_handle = WorkerHandle()
-    logging_enforcer = LogInteractionEnforcer(context, worker_handle)
+    logging_enforcer = LogInteractionEnforcer(
+        context,
+        worker_handle,
+        call_session_id=call_session_id,
+        caller_phone=caller_phone,
+    )
     turn_taking_guard = OneUtterancePerTurnGuard(context)
     second_paragraph_filter = SecondParagraphFilter()
+    tts_language_switcher = TTSLanguageSwitcher(tts)
+    dynamic_prompt_injector = DynamicPromptInjector(
+        context=context, restaurant=ACTIVE_RESTAURANT, llm=llm
+    )
 
     audiobuffer = AudioBufferProcessor(auto_start_recording=True)
-    call_state = {"transcript": ""}
-
-    def capture_transcript() -> None:
-        call_state["transcript"] = build_transcript(context, ACTIVE_RESTAURANT.bot_name)
 
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
             user_aggregator,
+            dynamic_prompt_injector,
             llm,
             logging_enforcer,
             turn_taking_guard,
             second_paragraph_filter,
+            tts_language_switcher,
             tts,
             audiobuffer,
             transport.output(),
@@ -277,6 +384,24 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         },
     )
     worker_handle.worker = worker
+
+    @worker.event_handler("on_pipeline_error")
+    async def on_pipeline_error(worker, frame):
+        # ErrorFrames travel upstream (push_error) and land here once they
+        # reach the pipeline's start. STT connect failures are handled by
+        # ResilientSarvamSTTService's own callback instead — Sarvam's
+        # per-chunk send/receive errors also surface as plain ErrorFrames and
+        # are common transient noise, not a reliable "STT is dead" signal.
+        if isinstance(frame.processor, OpenAILLMService):
+            # An ErrorFrame here already means both the OpenAI SDK's own
+            # retries and retry_on_timeout above were exhausted for that turn.
+            await call_health.note_llm_failure(frame.error)
+        elif isinstance(frame.processor, SarvamTTSService):
+            # No retry/fallback wrapper for TTS yet (unlike Rumik's) — any
+            # error here ends the call immediately, no threshold. If this
+            # proves trigger-happy on transient Sarvam TTS blips, add a
+            # counter here the way note_llm_failure does for the LLM.
+            await call_health.degrade_silently("tts", frame.error)
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)

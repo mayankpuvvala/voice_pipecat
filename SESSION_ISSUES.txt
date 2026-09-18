@@ -1,0 +1,167 @@
+OPEN ISSUES / THINGS TO REVISIT — carried from session ending 2026-09-18,
+updated during session ending 2026-09-19
+=====================================================================
+Re-verify each item's status before acting on it; some may already be
+addressed by work landing after this was written (see "status" notes
+below — checked once against the codebase as of this file's creation).
+
+STILL OPEN
+---------------------------------------------------------------------
+
+1. Rumik TTS is one-shot HTTP, not streaming — unlike the OpenAI TTS it
+   replaced. OpenAITTSService streamed audio chunks as they arrived
+   (with_streaming_response); RumikTTSService (and its OpenAI fallback
+   path, which joins iter_bytes() into one bytes object before
+   returning) waits for the ENTIRE response before yielding anything.
+   For longer bot replies this likely means a longer pause before the
+   caller hears anything. Never measured/compared time-to-first-audio-
+   byte against the old streaming setup. Needs a real test call focused
+   on perceived latency, not just correctness.
+   Status as of writing: still true, confirmed by reading app/services/
+   rumik_tts.py directly (both _request_rumik and _request_openai_
+   fallback fully buffer before returning).
+   UPDATE 2026-09-19: SUPERSEDED, not just stale. app/main.py's _build_tts
+   no longer uses Rumik at all — switched to SarvamTTSService (bulbul:v3,
+   streaming WebSocket) on 2026-09-18, rumik_tts.py kept only as a
+   fallback reference per its own comment. Measured for real: Sarvam
+   TTFA ~260ms median across all text lengths (n=6 trials each, short/
+   medium/long), min_buffer_size=30 confirmed working as intended. This
+   item's original concern is resolved by the switch itself, not by
+   further investigation of Rumik.
+
+7. LLM time-to-first-token is the actual dominant latency source, not
+   TTS — measured for real, not assumed. gpt-5.4-nano/gpt-5.6-luna both
+   showed 1.5-2s median TTFT (n=6 trials, real system prompt), sometimes
+   3-5s+, against Sarvam STT's ~490ms tail latency and ~260ms TTS TTFA
+   combined. Confirmed via a real Langfuse trace too (individual `llm`
+   generation spans of 2-5.5s within one live call). Switching TTS text-
+   aggregation mode (SENTENCE vs TOKEN) was tested and ruled out as a
+   fix — gpt-5.4-nano/5.6-luna's first streamed chunk already tends to be
+   a full short sentence ("Hi!"), so there's little to gain there.
+   settings.py's GROQ_ENABLED comment already flags Groq (LPU inference)
+   as the one concrete untried lever for this — currently disabled,
+   blocked on a billing tier upgrade + re-verification, per that
+   comment's own instructions. Not attempted this session. User's own
+   words after this round: "works good, but replies are super slow imo"
+   — this is why, and Groq is the next thing to actually try, not
+   another model swap within OpenAI's own catalog (already tried, see
+   item 8 below — latency-neutral).
+
+8. OPENAI_MODEL switched to gpt-5.6-luna (was gpt-5.4-nano) on 2026-09-19
+   after empirically testing candidates (gpt-5-nano, gpt-5.6-luna)
+   against the exact regressions documented in TROUBLESHOOTING.md's
+   "Conversational LLM model choice" section — date-resolution and
+   log_interaction reliability, 6/6 both, matching gpt-5.4-nano exactly,
+   at ~4% cheaper output tokens. Full writeup and the gpt-5-nano
+   rejection reasoning (10-29s latency, a reasoning model) in
+   TROUBLESHOOTING.md. Two follow-up regressions this broke and got
+   fixed live (see RESOLVED below) — the model swap itself was validated
+   with synthetic tests before touching code, but the ecosystem of
+   direct chat.completions.create call sites using settings.openai_model
+   wasn't fully audited until real production tracebacks found the
+   gaps. Worth a real telephony test call (not just /live) before fully
+   trusting this in production — everything so far is /live + synthetic
+   API tests, per item 5 below, which still applies and is now more
+   relevant than when it was written.
+
+2. Vobiz's keepCallAlive="false" behavior was never verified against a
+   real Vobiz call. Set based on protocol analogy with Plivo (reasoned,
+   not confirmed) specifically to avoid repeating the Exotel silent-
+   hangup bug class. Needs one real test call to confirm closing the
+   WebSocket actually ends the call cleanly on Vobiz's side.
+   Status as of writing: TROUBLESHOOTING.md doesn't mention Vobiz at
+   all yet — this still needs its own verification/writeup.
+
+3. Vobiz/Plivo auto-detection collision risk. app/main.py's bot()
+   treats ANY stream that auto-detects as "plivo" as a Vobiz call,
+   since this app has no real Plivo account. If a genuine Plivo
+   integration is ever added later, this logic will misroute it to the
+   Vobiz code path. Fine for now, but a landmine for future-you.
+
+4. Caller's phone number is threaded through the Vobiz
+   wss://.../ws?from=...&to=... URL as a query param — fine over TLS,
+   but could land in server access logs depending on hosting config.
+   Minor, not urgent.
+
+5. Eval suite was never run against this session's changes (Vobiz
+   integration, Rumik TTS switch, or the prompt/comment trims). All
+   validated via targeted manual testing + production smoke checks,
+   not the actual eval harness. Worth a real run before trusting these
+   changes fully.
+
+6. admin_service/ (a whole separate app — own Dockerfile, port 8081)
+   plus related changes to app/admin/routes.py, app/admin/
+   sheets_reader.py, app/services/drive_oauth_setup.py, and parts of
+   .env.example / app/config/settings.py (the _restaurant_env /
+   _RESTAURANT_ID multi-tenant helper) have been sitting UNCOMMITTED
+   this entire session. TROUBLESHOOTING.md (also uncommitted) already
+   references admin_service/ and _restaurant_env as if they're real,
+   working features, not abandoned WIP — so this looks like genuine,
+   substantial, in-progress work, not clutter. Still: it's uncommitted,
+   which is a real risk of losing it. Worth committing deliberately
+   once it's confirmed ready, not left sitting in the working tree.
+
+RESOLVED 2026-09-19 (kept here for the record, not action items)
+---------------------------------------------------------------------
+
+- OpenAILLMService.Settings in app/main.py's _build_llm now passes
+  extra={"reasoning_effort": "none"} — required for gpt-5.6-luna to
+  accept function tools on /v1/chat/completions at all (400s otherwise).
+  Confirmed harmless against gpt-5.4-nano too, so safe if OPENAI_MODEL
+  is ever reverted.
+
+- app/pipeline/logging_enforcer.py's _backfill_log_interaction call
+  (separate AsyncOpenAI client, also attaches tools) hit the identical
+  400 in a live /live test — found from a real traceback, not caught
+  ahead of time. Fixed with the same reasoning_effort="none".
+
+- app/pipeline/transcript.py's generate_call_summary used the legacy
+  max_tokens=120 param, which gpt-5.6-luna rejects outright ("Unsupported
+  parameter: 'max_tokens' ... Use 'max_completion_tokens' instead") —
+  also found from a live traceback. Fixed to max_completion_tokens=120,
+  confirmed working against both gpt-5.6-luna and gpt-5.4-nano.
+
+- /live's "Data channel not established within 10s after connection"
+  warning (and the "disabling future queueing" that follows). Root
+  cause: app/live_client.py's hand-written JS never called
+  pc.createDataChannel(...); pipecat's SmallWebRTCTransport passively
+  waits for the client to open one and times out after 10s if it
+  doesn't. Confirmed via two independent from-scratch test server runs
+  that this was 100% reproducible, not a one-off — and confirmed via
+  real end-to-end test calls (fake mic audio, real Sarvam/OpenAI) that
+  it never actually broke the conversation; audio flows over a separate
+  track. Fixed with one line (pc.createDataChannel('events')), re-tested
+  clean. Structurally cannot affect real telephony calls — those use
+  FastAPIWebsocketTransport, no ICE/data-channel concept at all. Full
+  writeup in TROUBLESHOOTING.md.
+
+- Fallback TTS voice gender mismatch: OPENAI_TTS_VOICE was "shimmer"
+  (female) while the primary Rumik voice is "adam" (male) — a caller
+  could hear the bot's voice flip gender mid-call on a Rumik failure.
+  Fixed: OPENAI_TTS_VOICE changed to "echo" (male-sounding) in .env,
+  .env.example, and the code default.
+
+- TROUBLESHOOTING.md didn't exist despite being referenced by
+  call_health.py and resilient_stt.py. Now exists, and is thorough —
+  covers CALL_HEALTH log shapes, both real prod-crash incidents from
+  today (with commit hashes), API key rotation checks, and more.
+
+- The root cause behind today's two production outages (code
+  referencing a file/field that existed locally but was never actually
+  committed) is now documented in TROUBLESHOOTING.md's "Deploy
+  crash-loops" section, with a concrete pre-push check:
+      git status
+      git ls-files --others --exclude-standard
+      python -c "import app.main"
+
+OPEN QUESTION (not a code issue — needs a human answer)
+---------------------------------------------------------------------
+
+- Who/what is making the parallel edits landing in this working tree
+  mid-session (call_health.py, resilient_stt.py, the Rumik->OpenAI TTS
+  fallback, TROUBLESHOOTING.md, README.md, the OPENAI_TTS_VOICE fix,
+  admin_service/ and the multi-tenant settings refactor)? None of this
+  was written by the assistant in this conversation. If it's another
+  session/tool working in parallel, worth knowing before committing
+  anything in this area, to avoid clobbering or duplicating that work.
+=====================================================================

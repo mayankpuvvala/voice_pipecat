@@ -12,7 +12,49 @@ of this; nothing here should need editing to add those.
 
 from __future__ import annotations
 
-from app.config.restaurants import Restaurant
+from app.config.restaurants import Restaurant, TopicFacts
+
+_MENU_TOPIC = TopicFacts(
+    keywords=(
+        "menu",
+        "food",
+        "eat",
+        "dish",
+        "starter",
+        "main",
+        "curry",
+        "biryani",
+        "naan",
+        "bread",
+        "rice",
+        "dessert",
+        "drink",
+        "lassi",
+        "chai",
+        "vegetarian",
+        "vegan",
+        "veg",
+        "paneer",
+        "chicken",
+        "mutton",
+        "tandoor",
+        "kebab",
+        "samosa",
+        "allergen",
+        "allergy",
+        "gluten",
+        "spicy",
+        "spice",
+    ),
+    text="""Menu highlights:
+- Starters: paneer tikka, chicken seekh kebab, vegetable samosas, dahi puri
+- Mains: butter chicken, chicken tikka masala, mutton rogan josh, palak paneer, dal makhani
+- Rice: vegetable biryani, chicken biryani
+- Breads: garlic naan, butter naan, tandoori roti, laccha paratha
+- Desserts: gulab jamun, gajar ka halwa, kulfi
+- Drinks: mango lassi, masala chai, fresh lime soda
+Dietary: most mains are available in a vegetarian version; tandoor grill items are non-vegetarian unless the caller asks otherwise.""",
+)
 
 SPICE_ROUTE_KITCHEN = Restaurant(
     name="Spice Route Kitchen",
@@ -38,14 +80,6 @@ Address: 142 Residency Road, Bengaluru, Karnataka 560025
 Hours: Tuesday–Sunday, 12:00 PM–3:30 PM and 7:00 PM–11:00 PM. Closed Mondays.
 Takeout/delivery: Yes, both. Delivery via Swiggy/Zomato and direct phone orders for pickup.
 Reservations: We take reservations for any group size — just get their name and the date/time they'd like, no phone number needed for a reservation itself. The owner will have the table ready.
-Menu highlights:
-- Starters: paneer tikka, chicken seekh kebab, vegetable samosas, dahi puri
-- Mains: butter chicken, chicken tikka masala, mutton rogan josh, palak paneer, dal makhani
-- Rice: vegetable biryani, chicken biryani
-- Breads: garlic naan, butter naan, tandoori roti, laccha paratha
-- Desserts: gulab jamun, gajar ka halwa, kulfi
-- Drinks: mango lassi, masala chai, fresh lime soda
-Dietary: most mains are available in a vegetarian version; tandoor grill items are non-vegetarian unless the caller asks otherwise.
 Parking: Small lot behind the building, plus metered street parking on Residency Road.
 Payment: Cash, cards, UPI.
 === END FACTS ===
@@ -63,4 +97,5 @@ Rules:
 - If it sounds like a genuine emergency (fire, medical, safety), tell them to call 112 right away — India's nationwide emergency number for police, fire, and medical — then end the call so they can dial.
 - Never mention tool names, JSON, or "the system" to the caller.
 """,
+    topic_facts=(_MENU_TOPIC,),
 )

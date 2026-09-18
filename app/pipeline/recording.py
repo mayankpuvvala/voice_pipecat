@@ -5,13 +5,12 @@ account via OAuth) as the near-term recording backend — app.services.r2_client
 (Cloudflare R2) is the intended longer-term one, parked until R2 is actually
 activated on the Cloudflare account; swap the import below once it is.
 
-Wired to AudioBufferProcessor's on_audio_data event (see app/main.py), which
-fires once per call — with the complete merged user+bot audio — right as the
-call ends. Awaited directly rather than fired-and-forgotten: the small delay
-this adds to pipeline teardown happens after all audio has already reached
-the caller, so it's invisible to them, and awaiting it guarantees the
-recording is actually saved before the worker is considered stopped rather
-than risking it getting cut off mid-upload.
+Wired to AudioBufferProcessor's on_audio_data (see app/main.py), which fires
+once per call with the complete merged audio, right at call-end. Awaited
+rather than fire-and-forgotten: the added teardown delay happens after all
+audio already reached the caller, so it's invisible to them, and guarantees
+the recording saves before the worker is considered stopped instead of
+risking a mid-upload cutoff.
 
 Audio upload, summary generation, and the sheet write are independent best
 efforts — a failure in one (e.g. the recording upload) doesn't prevent the

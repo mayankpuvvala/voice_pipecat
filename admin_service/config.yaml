@@ -1,0 +1,42 @@
+# Registry of restaurants this admin/dashboard service knows about.
+#
+# Deliberately holds NO secrets — only what's safe to see in a diff or a
+# screen-share: display names, dashboard paths, and Sheet IDs (a Sheet ID
+# alone grants nothing; reading it still requires the service account
+# below to have been separately shared as a viewer on that sheet). Real
+# credentials (admin login passwords) are referenced here only by the NAME
+# of the env var that holds them (admin_username_env / admin_password_env),
+# never by value — see config.py's docstring for why, and .env.example for
+# the actual env var names this file's *_env fields point at.
+#
+# admin_path must be unique across restaurants and isn't a lookup key
+# anyone can pass in at request time — it's read once at startup and each
+# path gets permanently wired to exactly this one restaurant's config
+# object (see config.py's load_config / "hard separation").
+
+restaurants:
+  zero40:
+    display_name: "Zero40 Brewing"
+    admin_path: /zero
+    google_sheet_id: "1LNByD7c59uE5ofRVLQX6KgQVJM1SD2Eg6A3ivnooRCg"
+    admin_username_env: ZERO40_ADMIN_USERNAME
+    admin_password_env: ZERO40_ADMIN_PASSWORD
+    minutes_allowed_per_month: 9000
+
+  # TEMPORARY: pointed at Zero40's own sheet as a placeholder so the service
+  # can start (an empty google_sheet_id fails config load — see config.py's
+  # _require) — Spice Route Kitchen doesn't have its own tracking sheet yet.
+  # Until it gets a real sheet_id, this dashboard shows Zero40's calls, not
+  # its own. Swap in Spice's real Sheet ID (shared with the same service
+  # account) as soon as it exists.
+  spice_route_kitchen:
+    display_name: "Spice Route Kitchen"
+    admin_path: /spice
+    google_sheet_id: "1LNByD7c59uE5ofRVLQX6KgQVJM1SD2Eg6A3ivnooRCg"
+    admin_username_env: SPICE_ADMIN_USERNAME
+    admin_password_env: SPICE_ADMIN_PASSWORD
+    minutes_allowed_per_month: 9000
+
+super_admin:
+  admin_username_env: SUPERADMIN_USERNAME
+  admin_password_env: SUPERADMIN_PASSWORD

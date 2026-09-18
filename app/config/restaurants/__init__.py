@@ -17,6 +17,22 @@ from app.config.settings import settings
 
 
 @dataclass(frozen=True)
+class TopicFacts:
+    """One optional block of system-prompt facts, included only when the
+    caller's own words suggest it's actually relevant this call.
+
+    See app/pipeline/dynamic_prompt.py for how `keywords` gets matched
+    against the conversation and app/pipeline/prompts.py's
+    build_system_prompt for how `text` gets spliced in. Kept as data here
+    (not logic) so each restaurant's config owns its own topic split
+    without touching the matching code.
+    """
+
+    keywords: tuple[str, ...]
+    text: str
+
+
+@dataclass(frozen=True)
 class Restaurant:
     name: str
     bot_name: str
@@ -25,6 +41,11 @@ class Restaurant:
     system_prompt: str
     timezone: str
     hours: dict[int, list[tuple[str, str]]]
+    # Facts that most calls never touch (full menu, membership perks,
+    # seating/ambience, etc.) — left out of system_prompt itself and only
+    # spliced in once the caller actually asks about that topic. See this
+    # file's TopicFacts docstring and app/pipeline/dynamic_prompt.py.
+    topic_facts: tuple[TopicFacts, ...] = ()
 
 
 # Imported after `Restaurant` is defined above, not before: each client

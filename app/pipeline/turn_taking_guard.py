@@ -1,37 +1,27 @@
 """Stops the bot from speaking a second time before the caller replies.
 
-Confirmed live from a real call: the caller asked for a reservation, the
-bot asked "What name should I put the reservation under?", and — with no
-caller input in between — immediately also asked "What date and time
-would you like for the reservation?". The caller never got a chance to
-answer the first question; both landed back to back, so they answered
-both at once. Traced via the server log: round 1 spoke the name question
-(no tool call, so LogInteractionEnforcer nudged it); the nudge's own
-silent followup correctly called logInteraction and said nothing; but
-pipecat's automatic continuation *after that tool call* is a real, new,
-un-swallowed round by design (see logging_enforcer.py's docstring — a
-nudge-originated chain deliberately only swallows its own immediate
-followup, never further, specifically so a legitimate next question isn't
-lost as dead air). In this case what came out of that continuation wasn't
-a legitimate next question, though — it was the bot just moving on to its
-next planned question without waiting for an answer to the first.
+Confirmed live: the bot asked "What name should I put the reservation
+under?", then -- with no caller input in between -- immediately also asked
+"What date and time?", so the caller answered both at once. Root cause:
+LogInteractionEnforcer's nudge correctly swallowed its own immediate
+followup, but pipecat's automatic continuation *after that tool call* is a
+new, un-swallowed round by design (see logging_enforcer.py's docstring --
+deliberately so a legitimate next question isn't lost as dead air). Here
+the continuation wasn't a legitimate next question, just the bot moving on
+without waiting for an answer.
 
-This guard doesn't try to track *why* a round exists (nudge-originated vs.
-a normal reply+tool-call chain) the way LogInteractionEnforcer's
-`_awaiting_followup`/`_chain_extends` do -- that tracking is inherently
-best-effort, since pipecat's own automatic post-tool-call continuation
-looks identical whether it's a legitimate next sentence or the model just
-continuing unprompted. This guard is the backstop that doesn't need to
-know which case it is: it enforces one plain invariant regardless --
+This guard doesn't track *why* a round exists (nudge-originated vs. a
+normal reply+tool-call chain) the way LogInteractionEnforcer does -- that's
+inherently best-effort, since pipecat's automatic continuation looks
+identical either way. Instead it enforces one plain, transaction-agnostic
+invariant:
 
     the bot may speak at most once per caller turn.
 
-A "caller turn" here is identified by `user_turn_id`, a count of committed
-user messages in the shared LLMContext. That count only advances when the
-user aggregator has actually finalized a caller utterance into context --
-it does not advance for VAD noise/false triggers, tool calls, tool
-results, or any of pipecat's internal LLM continuations, which is what
-makes it a valid turn id rather than just an incidental proxy.
+A "caller turn" is `user_turn_id`, a count of committed user messages in
+the shared LLMContext -- it only advances when the user aggregator
+finalizes a real caller utterance, not for VAD noise, tool calls/results,
+or pipecat's internal continuations.
 """
 
 from __future__ import annotations
@@ -114,14 +104,10 @@ class OneUtterancePerTurnGuard(FrameProcessor):
                 self._spoken_text_turn_id = current_turn_id
                 self._spoken_text_parts = []
             self._spoken_text_parts.append(frame.text)
-            # Credit the moment real text is actually forwarded, not at
-            # round-end: an interruption can cancel a round before its
-            # LLMFullResponseEndFrame ever reaches this processor, and a
-            # credit-on-end approach would then treat a retry of the same
-            # question as a still-unspoken first utterance. Crediting here
-            # means even a partially-spoken, later-interrupted utterance
-            # still counts -- correctly, since the caller did hear part of
-            # an answer for this turn.
+            # Credit on forward, not at round-end: an interruption can cancel
+            # a round before LLMFullResponseEndFrame arrives, so crediting at
+            # end would wrongly treat an interrupted utterance as unspoken --
+            # but the caller did hear part of it, so it should still count.
             if not self._credited_this_round and frame.text.strip():
                 self._answered_turn_id = current_turn_id
                 self._credited_this_round = True

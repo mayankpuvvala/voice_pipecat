@@ -115,6 +115,11 @@ can't stall audio on the live call while it's in flight.
 
 ## Run
 
+Hitting a real failure — deploy crash-loop, bot apologizing and hanging up,
+wrong restaurant's facts, missing admin columns — check
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md) first; it also documents what the
+`CALL_HEALTH*` log lines mean.
+
 ```bash
 python -m app.main -t exotel
 ```
@@ -132,10 +137,14 @@ ngrok: `ngrok http 7860`, then set the Voicebot Applet's URL to
 `wss://<your-ngrok-domain>/ws`); in production this is Railway's own
 public `wss://` URL.
 
-There's no browser test client anymore — testing this pipeline means
-placing (or forwarding) a real call through Exotel, or driving `/ws`
-directly with a script that speaks Exotel's Media Streams JSON protocol
-(`event: "start" | "media" | "dtmf"`, base64 PCM payloads).
+**`/live` is a browser WebRTC test client** (HTTP Basic auth, same
+credentials as `/admin`) — open it, click Connect, and talk to this exact
+bot from your mic without placing a real (billed) Exotel/Vobiz call. See
+`app/live_client.py` and TROUBLESHOOTING.md's "Testing without a real
+(billed) phone call". Otherwise, testing this pipeline means placing (or
+forwarding) a real call through Exotel, or driving `/ws` directly with a
+script that speaks Exotel's Media Streams JSON protocol (`event: "start" |
+"media" | "dtmf"`, base64 PCM payloads).
 
 **Provider is swappable, not hardcoded to Exotel.** `transport_params` in
 `app/main.py` registers exotel/twilio/telnyx/plivo identically — pipecat
@@ -227,7 +236,7 @@ Two things confirmed the hard way, not guessed:
 
 ## Deviations from the original plan doc (found while building, not guesses)
 
-- **TTS is OpenAI (`voice=shimmer`, matching the Vapi config), not edge-tts.**
+- **TTS is OpenAI (`voice=echo`, matching the Vapi config), not edge-tts.**
   Telugu/Hindi-matched voices are deferred — replies are correct-language
   text from the LLM, but always spoken in an English TTS voice for now. When
   Telugu/Hindi voice quality gets picked up, Sarvam TTS is the natural next

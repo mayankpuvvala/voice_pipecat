@@ -1,21 +1,13 @@
-"""Reads call data straight from the same Google Sheet the live-call tools
-write to.
-
-This project has no local database — the sheet itself is the only record of
-past calls, so the admin page's data source is a read of the sheet rather
-than a synced copy. Read-only scope, deliberately separate from
-app.services.sheets_client's read+write client used by the live-call tools.
-
-fetch_calls() is cached for _CACHE_TTL_SECONDS: each admin_page() request
-issued 3 separate Sheets API calls (Sheet1/Bookings/Recordings) with no
-reuse, multiplied by every refresh or concurrent viewer for no benefit —
-nothing here changes faster than a human would notice. The cache is
-in-process/per-worker, holding only the last successful result; a failed
-fetch is never cached, so a transient Sheets error can't paper over itself.
+"""Reads + joins one restaurant's Sheet1/Bookings/Recordings tabs into one
+row per call. Self-contained rather than importing app.admin.sheets_reader
+(that version is single-sheet/global-settings only, and importing it would
+pull app/ into this container) — same join shape, parameterized by
+sheet_id, cached per sheet_id for _CACHE_TTL_SECONDS.
 """
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -23,57 +15,42 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from loguru import logger
 
-from app.config.settings import settings
-
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-
-_CACHE_TTL_SECONDS = 20.0
-_cached_calls: list[dict[str, Any]] | None = None
-_cached_at: float = 0.0
-
 _CONFIDENCE_RANK = {"high": 1, "medium": 2, "low": 3}
+_CACHE_TTL_SECONDS = 20.0
+
+_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
 
 def _client():
     info = {
         "type": "service_account",
-        "client_email": settings.google_service_account_email,
-        "private_key": settings.google_service_account_private_key,
+        "client_email": os.environ.get("GOOGLE_SERVICE_ACCOUNT_EMAIL", ""),
+        "private_key": os.environ.get("GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY", ""),
         "token_uri": "https://oauth2.googleapis.com/token",
     }
     creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
     return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 
-def read_rows(sheet_name: str) -> list[dict[str, Any]]:
-    """Return every row in `sheet_name` as header-keyed dicts, sheet order
-    (oldest first)."""
+def _read_rows(sheet_id: str, sheet_name: str) -> list[dict[str, Any]]:
     service = _client()
     result = (
-        service.spreadsheets()
-        .values()
-        .get(spreadsheetId=settings.google_sheet_id, range=sheet_name)
-        .execute()
+        service.spreadsheets().values().get(spreadsheetId=sheet_id, range=sheet_name).execute()
     )
     rows = result.get("values", [])
     if not rows:
         return []
     header, *data_rows = rows
-    # Google's API drops trailing empty cells per row rather than padding —
-    # zip() would silently misalign columns on short rows without this.
     padded_rows = [row + [""] * (len(header) - len(row)) for row in data_rows]
     return [dict(zip(header, row)) for row in padded_rows]
 
 
-def _read_rows_safe(sheet_name: str) -> list[dict[str, Any]]:
-    """Like read_rows, but a missing/misnamed tab degrades that tab's data
-    to empty instead of failing the whole admin page — a deployment that's
-    only set up Sheet1 + Bookings so far should still see call/booking data
-    even before a Recordings tab exists."""
+def _read_rows_safe(sheet_id: str, sheet_name: str) -> list[dict[str, Any]]:
     try:
-        return read_rows(sheet_name)
+        return _read_rows(sheet_id, sheet_name)
     except Exception:
-        logger.exception("fetch_calls: failed to read '{}' sheet tab", sheet_name)
+        logger.exception("fetch_calls: failed to read '{}' tab for sheet {}", sheet_name, sheet_id)
         return []
 
 
@@ -96,29 +73,21 @@ def _new_call(session_id: str) -> dict[str, Any]:
     }
 
 
-def fetch_calls() -> list[dict[str, Any]]:
-    """Cached wrapper around _fetch_calls_uncached() — see module docstring."""
-    global _cached_calls, _cached_at
+def fetch_calls(sheet_id: str) -> list[dict[str, Any]]:
+    """One row per call for this sheet, newest first. Cached per sheet_id."""
     now = time.monotonic()
-    if _cached_calls is not None and (now - _cached_at) < _CACHE_TTL_SECONDS:
-        return _cached_calls
-    calls = _fetch_calls_uncached()
-    _cached_calls = calls
-    _cached_at = now
+    cached = _cache.get(sheet_id)
+    if cached is not None and (now - cached[0]) < _CACHE_TTL_SECONDS:
+        return cached[1]
+    calls = _fetch_calls_uncached(sheet_id)
+    _cache[sheet_id] = (now, calls)
     return calls
 
 
-def _fetch_calls_uncached() -> list[dict[str, Any]]:
-    """Join Sheet1 (per-topic interactions), Bookings, and Recordings into
-    one row per call, keyed by CallSessionId — newest first.
-
-    Rows that predate the CallSessionId column (blank id) all collapse into
-    a single "" bucket and will look like one jumbled call; that's a known
-    limitation for a handful of legacy rows, not worth special-casing.
-    """
-    interactions = _read_rows_safe("Sheet1")
-    bookings = _read_rows_safe("Bookings")
-    recordings = _read_rows_safe("Recordings")
+def _fetch_calls_uncached(sheet_id: str) -> list[dict[str, Any]]:
+    interactions = _read_rows_safe(sheet_id, "Sheet1")
+    bookings = _read_rows_safe(sheet_id, "Bookings")
+    recordings = _read_rows_safe(sheet_id, "Recordings")
 
     calls: dict[str, dict[str, Any]] = {}
 
@@ -145,8 +114,7 @@ def _fetch_calls_uncached() -> list[dict[str, Any]]:
         if str(row.get("Drift", "")).strip().lower() == "true":
             call["escalated"] = True
         rank = _CONFIDENCE_RANK.get(str(row.get("CallConfidence", "")).strip().lower(), 0)
-        if rank > call["confidence_rank"]:
-            call["confidence_rank"] = rank
+        call["confidence_rank"] = max(call["confidence_rank"], rank)
 
     for row in bookings:
         call = get_call(row.get("CallSessionId", ""))
