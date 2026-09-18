@@ -1,9 +1,20 @@
 name: 14_leading_zero_phone
 judge: !include judge_text.yaml
 turns:
+  # This scenario's original assertion checked log_interaction's own
+  # caller_phone arg to confirm a leading zero survives intact (not parsed
+  # as a number and stripped). log_interaction is no longer a live tool the
+  # model can call (see app/main.py's context.tools / 01_hours_question.yaml
+  # for why) -- it now only runs via a background classifier
+  # (LogInteractionEnforcer._backfill_log_interaction), invisible to this
+  # harness's function_call event. That background call reuses the exact
+  # same tool schema/prompt, so leading-zero handling itself is unchanged,
+  # but this suite can no longer assert it directly -- check the /admin
+  # sheet's CallerPhone column for a real ZZ-EVALTEST call if this needs
+  # re-verifying, or add a book_table-based scenario (book_table's own
+  # caller_phone arg is still live and assertable) if a reservation flow
+  # ever needs the same guard.
   - user: "Can you take a message? My name is ZZ-EVALTEST Neha and my number is 0987654321. I wanted to ask about bulk catering prices."
     expect:
-      - event: function_call
-        calls:
-          - name: log_interaction
-            args: { caller_phone: "0987654321", resolved: false }
+      - event: response
+        eval: "treats this as a message to pass along to the owner rather than trying to answer the exact catering pricing question itself"

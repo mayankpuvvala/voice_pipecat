@@ -5,7 +5,9 @@ turns:
     expect:
       - event: response
         eval: "tells the caller the restaurant's operating hours, including that it is closed on Mondays"
-      - event: function_call
-        calls:
-          - name: log_interaction
-            args: { resolved: true }
+      # log_interaction is no longer a live tool the model can call (see
+      # app/main.py's context.tools) -- it forced a silent tool-call-only
+      # round before every spoken reply, doubling LLM latency per turn.
+      # A background backfill (app/pipeline/logging_enforcer.py) logs every
+      # reply instead, off the live call's critical path and invisible to
+      # this harness's function_call event. Not asserted here anymore.

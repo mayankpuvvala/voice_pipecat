@@ -1,11 +1,9 @@
 name: 09_duplicate_question_dedupe
 judge: !include judge_text.yaml
 turns:
+  # No expect: block -- log_interaction is no longer a live tool, see
+  # 01_hours_question.yaml.
   - user: "What time do you close tonight?"
-    expect:
-      - event: function_call
-        calls:
-          - name: log_interaction
   - user: "Sorry, what time do you close?"
     send_after: { event: llm_response, delay_ms: 500 }
     expect:

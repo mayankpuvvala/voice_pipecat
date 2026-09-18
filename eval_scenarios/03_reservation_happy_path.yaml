@@ -22,6 +22,6 @@ turns:
         calls:
           - name: book_table
             args: { caller_name: "ZZ-EVALTEST Rahul" }
-          - name: log_interaction
+      # log_interaction no longer asserted -- see 01_hours_question.yaml.
       - event: response
         eval: "confirms the table is booked"

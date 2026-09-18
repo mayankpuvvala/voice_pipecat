@@ -8,6 +8,86 @@ below — checked once against the codebase as of this file's creation).
 STILL OPEN
 ---------------------------------------------------------------------
 
+9. "Bulk catering prices" not reliably treated as a take-a-message case.
+   Found running the full eval suite 2026-09-19 (eval_scenarios/eval-runs/
+   20260919_021305, scenario 14_leading_zero_phone) -- confirmed
+   reproducible across 3 independent runs, not a one-off: asked "I wanted
+   to ask about bulk catering prices" (with name/phone already given), the
+   bot asks a clarifying follow-up ("What exactly would you like to know
+   about bulk catering prices?") instead of applying rule 4 (exact
+   prices/large events -> take a message, don't guess) the way it
+   correctly does for allergens (06_allergen_out_of_scope) and large
+   private events (07_pushback_after_decline). Pre-existing, not caused by
+   this session's changes -- the OLD version of scenario 14 only ever
+   asserted logInteraction's tool-call args (phone leading-zero
+   preservation), never actually checked the spoken reply's content, so
+   this gap was invisible to the suite until the scenario was rewritten
+   (see item 10 below for why the rewrite happened). Not investigated
+   further this session -- likely needs "catering" added explicitly to
+   zero40.py's rule 4 examples, or a live comparison against how
+   allergens/large-events phrasing differs, but that's prompt tuning, not
+   guessing from one failure.
+   Status: open, needs its own investigation.
+
+10. logInteraction removed as a live LLM tool entirely (2026-09-19) --
+   see app/main.py's context.tools, app/pipeline/prompts.py's
+   _LOGGING_TIMING_INSTRUCTION, and both app/config/restaurants/*.py
+   system prompts (had their own "Log every... with the logInteraction
+   tool" line, item 6 in each restaurant's numbered job list -- removed,
+   was contradicting the new instruction and left the model mid-prompt
+   about a tool that no longer exists). Root cause: confirmed via a real
+   Langfuse trace that the model was splitting every single turn into a
+   silent tool-call-only round (logInteraction) followed by a separate
+   spoken-reply round -- two full LLM round-trips per turn instead of one,
+   on nearly every turn, not just reservation flows. LogInteractionEnforcer's
+   background backfill (app/pipeline/logging_enforcer.py) already covers
+   100% of logging reliably off the critical path, confirmed working
+   across every turn of a real test call before this change -- so the
+   live tool call was pure redundant latency, not a safety net.
+   Measured impact, real before/after eval-suite comparison (same
+   01_hours_question scenario): 2 LLM round-trips / ~3.6s (eval-runs/run2,
+   pre-fix, also shows the exact narrated-tool-call failure mode
+   TROUBLESHOOTING.md documents for gpt-4o-mini) -> 1 LLM round-trip /
+   ~1.9s (eval-runs/20260919_021305, post-fix).
+   All 13 eval scenarios that asserted a live logInteraction function_call
+   were updated to match (01,02,03,04,06,07,09,10,14,24,25,26,28) -- see
+   each file's own comment. 14_leading_zero_phone was rewritten with a
+   real response-content assertion instead of a tool-arg assertion, which
+   is what surfaced item 9 above.
+   Status: shipped and eval-verified (18/29 pass; remaining 11 failures
+   are pre-existing stale hardcoded reservation dates -- see item 11 below
+   -- plus item 9's pre-existing gap, none are regressions from this).
+   Also fixed same session: TTS was hardcoded to Language.HI_IN for the
+   whole call regardless of reply content (app/main.py's _build_tts) --
+   confirmed live, plain English replies (guest counts, numbers) came out
+   Hindi-accented. New app/pipeline/tts_language_switcher.py switches
+   Sarvam's target_language_code per reply based on the actual text's
+   script, English by default. Also: app/services/sheets_client.py was
+   rebuilding a fresh Google OAuth client (a real token-exchange network
+   call) on every single check_availability/book_table/logging call
+   instead of reusing one -- check_availability/book_table are on the
+   live call's critical path, so this was real avoidable latency on every
+   reservation turn. Fixed to a module-level cached client.
+   User explicitly ruled out switching the conversational LLM off OpenAI
+   (no Groq, staying on Sarvam STT/TTS + OpenAI LLM + pipecat) and
+   deprioritized hosting (Hetzner, "not for now") in favor of local
+   correctness/speed -- so item 7 below (Groq) should NOT be acted on
+   without the user explicitly revisiting that decision.
+
+11. Eval suite fixture date staleness is worse than the README's own list
+   suggests. README.md flags scenarios 03, 10, 12, 13, 19, 24, 25, 29 as
+   hardcoding absolute dates that rot over time -- confirmed 2026-09-19
+   (today) that this list is incomplete: 04_reservation_outside_hours
+   (date 2026-09-07) and 05_reservation_missing_name (date 2026-09-09)
+   also hardcode now-past dates and fail the same way (05's bot reply
+   literally says "I'm sorry, that date has passed" -- is_within_hours
+   correctly rejecting it, not a bug). 11 of 29 scenarios failed in the
+   2026-09-19 full run for this reason. Needs either a periodic
+   hand-bump of every hardcoded date in eval_scenarios/*.yaml, or a
+   templating mechanism (see README's own note that the yaml format has
+   none today) -- not attempted this session, out of scope for a latency
+   investigation.
+
 1. Rumik TTS is one-shot HTTP, not streaming — unlike the OpenAI TTS it
    replaced. OpenAITTSService streamed audio chunks as they arrived
    (with_streaming_response); RumikTTSService (and its OpenAI fallback
@@ -46,6 +126,16 @@ STILL OPEN
    — this is why, and Groq is the next thing to actually try, not
    another model swap within OpenAI's own catalog (already tried, see
    item 8 below — latency-neutral).
+   UPDATE 2026-09-19: User explicitly ruled this out ("stick to tts, stt
+   for sarvam, llm for openai, orchestration pipecat") -- do NOT switch
+   the conversational LLM off OpenAI, including to Groq, without the
+   user revisiting this decision themselves. The remaining latency lever
+   within OpenAI is whatever's left after removing logInteraction as a
+   live tool (see item 10 above), which measurably helped (~3.6s -> ~1.9s
+   per turn on non-reservation turns). Reservation turns (check_
+   availability -> confirm -> book_table) still need 2+ round-trips
+   inherently -- that's correctness-driven (the read-back-and-confirm
+   gate), not something to cut for speed.
 
 8. OPENAI_MODEL switched to gpt-5.6-luna (was gpt-5.4-nano) on 2026-09-19
    after empirically testing candidates (gpt-5-nano, gpt-5.6-luna)

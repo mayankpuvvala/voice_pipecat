@@ -27,6 +27,6 @@ turns:
         calls:
           - name: book_table
             args: { caller_name: "ZZ-EVALTEST Divya", time: "20:00" }
-          - name: log_interaction
+      # log_interaction no longer asserted -- see 01_hours_question.yaml.
       - event: response
         eval: "confirms the table is booked for the corrected 8 PM time"

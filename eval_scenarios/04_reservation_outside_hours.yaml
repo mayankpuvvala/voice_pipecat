@@ -5,9 +5,9 @@ turns:
     expect:
       - event: response
         eval: "does not confirm a reservation is booked, and explains the restaurant is closed that day (Monday) rather than staying silent about why"
+  # No expect: block -- this turn's only assertion used to be that
+  # log_interaction got called, which is no longer a live tool (see
+  # 01_hours_question.yaml). Still sent to confirm the bot doesn't choke on
+  # a callback number after already declining the reservation.
   - user: "It's 9000000002."
     send_after: { event: llm_response, delay_ms: 500 }
-    expect:
-      - event: function_call
-        calls:
-          - name: log_interaction

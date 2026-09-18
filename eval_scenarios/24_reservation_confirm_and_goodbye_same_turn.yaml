@@ -24,10 +24,8 @@ turns:
     # 10_multi_topic_single_call.yaml for why: confirmed live that waiting
     # for a tool call before checking for a response can miss a real
     # confirmation that already went by. log_interaction is deliberately
-    # NOT asserted at all -- confirmed live its position relative to the
-    # spoken confirmation isn't consistent run to run (sometimes before it,
-    # sometimes after), so pinning it anywhere caused false fails on
-    # otherwise-correct flows. end_call is what this regression test
+    # NOT asserted at all -- it's no longer a live tool the model can call
+    # (see 01_hours_question.yaml). end_call is what this regression test
     # actually exists to check (see the module comment above).
     expect:
       - event: function_call

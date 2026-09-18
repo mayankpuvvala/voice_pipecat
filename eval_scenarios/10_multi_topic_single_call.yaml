@@ -1,11 +1,9 @@
 name: 10_multi_topic_single_call
 judge: !include judge_text.yaml
 turns:
+  # No expect: block -- log_interaction is no longer a live tool, see
+  # 01_hours_question.yaml.
   - user: "Do you have parking?"
-    expect:
-      - event: function_call
-        calls:
-          - name: log_interaction
   - user: "Also, can I book a table for 2026-09-20 at 12:30 PM for two? Name is ZZ-EVALTEST Divya."
     send_after: { event: llm_response, delay_ms: 500 }
     expect:
@@ -23,14 +21,10 @@ turns:
     # else?" follow-up), while the real confirmation had already gone by
     # earlier -- a false fail on a reply that was actually correct.
     #
-    # log_interaction is deliberately NOT asserted here at all (it was, but
-    # removed): confirmed live its position relative to the spoken
-    # confirmation isn't consistent run to run -- sometimes it lands before
-    # the confirmation text, sometimes after. Pinning either order caused
-    # false fails on reservation flows that were otherwise completely
-    # correct. Whether log_interaction fires at all is already covered by
-    # turn 0 above; this turn's job is just to check the booking + spoken
-    # confirmation actually happened.
+    # log_interaction is deliberately NOT asserted here (see
+    # 01_hours_question.yaml -- it's no longer a live tool at all now,
+    # not just an ordering-flakiness issue). This turn's job is just to
+    # check the booking + spoken confirmation actually happened.
     expect:
       - event: function_call
         calls:

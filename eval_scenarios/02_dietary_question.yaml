@@ -5,7 +5,5 @@ turns:
     expect:
       - event: response
         eval: "confirms vegetarian options are available"
-      - event: function_call
-        calls:
-          - name: log_interaction
-            args: { resolved: true }
+      # log_interaction is no longer a live tool -- see 01_hours_question.yaml
+      # for why it's not asserted here anymore.

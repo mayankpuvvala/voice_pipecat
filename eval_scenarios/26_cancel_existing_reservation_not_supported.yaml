@@ -10,10 +10,7 @@ turns:
     expect:
       - event: response
         eval: "does not claim to have cancelled or modified any reservation itself, and instead offers to pass this along to the owner, asking for the caller's name and a callback number"
+  # No expect: block -- log_interaction is no longer a live tool, see
+  # 01_hours_question.yaml.
   - user: "It's 9000000005."
     send_after: { event: llm_response, delay_ms: 500 }
-    expect:
-      - event: function_call
-        calls:
-          - name: log_interaction
-            args: { resolved: false }
