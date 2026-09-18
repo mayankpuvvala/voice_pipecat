@@ -21,6 +21,7 @@ class Settings:
     openai_tts_voice: str = os.environ.get("OPENAI_TTS_VOICE", "shimmer")
 
     sarvam_api_key: str = os.environ.get("SARVAM_API_KEY", "")
+    rumik_api_key: str = os.environ.get("RUMIK_API_KEY", "")
     twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")
 

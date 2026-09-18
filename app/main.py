@@ -44,7 +44,6 @@ from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport, parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.evals.transport import EvalTransportParams
 from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.transcriptions.language import Language
@@ -62,6 +61,7 @@ from app.pipeline.second_paragraph_filter import SecondParagraphFilter
 from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
+from app.services.rumik_tts import RumikTTSService
 from app.services.twilio_client import lookup_caller_number
 from app.tools.end_call import end_call
 from app.tools.log_interaction import log_interaction
@@ -194,10 +194,19 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             ),
         )
 
-    def _build_tts() -> OpenAITTSService:
-        return OpenAITTSService(
-            api_key=settings.openai_api_key,
-            voice=settings.openai_tts_voice,
+    def _build_tts() -> RumikTTSService:
+        # mulberry: the only Rumik model with male voice presets, and it
+        # natively handles Hindi/English/code-mixed text in one request —
+        # see app/services/rumik_tts.py. "table"-style loanword pronunciation
+        # was tested across several spellings (2026-09-18) and plain English
+        # spelling read fine; no special-casing needed for now.
+        return RumikTTSService(
+            api_key=settings.rumik_api_key,
+            speaker="adam",
+            description=(
+                "a male, 30s, indian accent voice, normal pitch, smooth timbre, "
+                "conversational pacing, professional register, like a restaurant host"
+            ),
         )
 
     context = LLMContext(tools=[log_interaction, check_availability, book_table, end_call])
