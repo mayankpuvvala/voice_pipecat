@@ -121,6 +121,27 @@ def judge_llm(config: dict):
     known cases. temperature=0's determinism win is simply unavailable on
     these models -- use gpt-4o/gpt-4o-mini instead if verdict stability
     matters more than a specific gpt-5 model's judgment quality.
+
+    gpt-5-family models also need reasoning_effort pinned low. Confirmed
+    live: EvalJudge hard-codes max_tokens=200 for every judge call (not
+    exposed through this factory hook -- pipecat.evals.judge.EvalJudge.
+    from_config only ever passes the service through, see its own source),
+    and gpt-5-mini spent the *entire* 200-token budget on hidden reasoning
+    tokens before ever emitting the visible JSON verdict -- confirmed via
+    the raw API: max_completion_tokens=200 with no reasoning_effort set
+    returned content='' (finish_reason='length', reasoning_tokens=200).
+    Every single scenario failed with "judge returned empty response",
+    including ones with an obviously-correct bot reply (02, 03, 06, 07, all
+    previously rock-solid) -- a worse failure mode than the temperature 400
+    above because it produces no error, just silent uniform "no" verdicts.
+    reasoning_effort="minimal" (confirmed: 0 reasoning tokens, clean JSON,
+    comfortably inside the 200-token budget) fixes it. Note this model's
+    valid values are minimal/low/medium/high -- "none" isn't one of them
+    and 400s (that's gpt-5.6-luna's requirement elsewhere in this codebase,
+    e.g. app/main.py's _build_llm -- the two gpt-5-family models don't even
+    agree with each other here, so don't assume any two "gpt-5*" models
+    share a valid reasoning_effort set, just that all of them need *some*
+    low setting to leave room for actual output in a small token budget.
     """
     from pipecat.services.openai.llm import OpenAILLMService
 
@@ -128,6 +149,8 @@ def judge_llm(config: dict):
     settings_kwargs: dict = {"model": model}
     if not model.startswith("gpt-5"):
         settings_kwargs["temperature"] = 0
+    else:
+        settings_kwargs["extra"] = {"reasoning_effort": "minimal"}
 
     return OpenAILLMService(settings=OpenAILLMService.Settings(**settings_kwargs))
 
