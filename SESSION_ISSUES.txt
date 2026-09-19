@@ -8,6 +8,104 @@ below — checked once against the codebase as of this file's creation).
 STILL OPEN
 ---------------------------------------------------------------------
 
+12. Reservation-detail gathering doesn't reliably reuse info the caller
+   already gave, when it arrives compressed into one message or a turn
+   apart. Found running the full eval suite 3x in a row (2026-09-19,
+   eval-runs/20260919_021305, /20260919_datefix, /20260919_datefix2) --
+   this is NOT the stale-date issue (item 11), confirmed by fixing every
+   hardcoded date to a valid future one (item 13 below) and having these
+   still fail identically. Consistently reproducible across all 3 runs,
+   objectively wrong bot text each time (not judge pickiness):
+   - 04_reservation_outside_hours, 10_multi_topic_single_call: caller
+     states date+time+guests in one sentence ("...at 2026-09-20 at 12:30
+     PM for two..."), bot asks "What time would you like the
+     reservation?" -- time was right there.
+   - 12_relative_date_resolution: caller says "tomorrow at 8 PM" as their
+     first message, bot asks "What date would you like the table for?"
+     instead of resolving "tomorrow" the way 03/29 (multi-turn, one
+     detail per turn) handle it fine.
+   - 24_reservation_confirm_and_goodbye_same_turn,
+     25_reservation_correction_after_readback: caller gives date+time+
+     guests+name in one sentence, bot asks "What phone number should we
+     attach to the reservation?" -- phone is explicitly NOT required per
+     both restaurants' rule 2 ("no phone number needed"). The bot is
+     asking for a field it was told it doesn't need.
+   - 05_reservation_missing_name: manifested differently each run (once
+     as the date-past message before item 13's fix; once as a
+     since-fixed Sheets concurrency error, see item 14; once as asking
+     "May I have the reservation date and time?" in turn 2, ignoring
+     that the caller already gave both in turn 0) -- same underlying
+     "loses already-given info" family, worth watching even though the
+     exact symptom varies.
+   - 19_audio_reservation_end_to_end: same pattern PLUS a real STT
+     fidelity issue on top (Sarvam transcribed "...Twentyth September...
+     PM" -- dropped the "8" before PM entirely -- so the bot asking for
+     time again was arguably the right call given what it actually
+     heard; this one may be more audio-pipeline noise than a text-
+     comprehension bug specifically).
+   Pre-existing, not caused by this session's other changes (logInteraction
+   removal, TTS language switching, Sheets client fix) -- none of those
+   touch reservation-field-gathering logic or _RESERVATION_TOOL_INSTRUCTION/
+   _BREVITY_INSTRUCTION in prompts.py. Not investigated further or fixed
+   this session -- this is real prompt-reliability work (likely needs
+   live iteration against compound, information-dense caller messages,
+   possibly a structural gate similar to turn_taking_guard.py/end_call.py's
+   pattern of not trusting prompt wording alone), out of scope for a
+   date-fixing pass. Flagging clearly rather than attempting a blind fix.
+
+13. Stale eval-suite dates (item 11) are now fixed. 03, 04, 05, 12, 19, 24,
+   25, 29 all had their hardcoded reservation dates bumped to real future
+   values (2026-09-19 today -> "tomorrow" scenarios use 2026-09-20, 04 uses
+   the next real Monday 2026-09-21, 05 uses 2026-09-23) -- see each file's
+   own comment. Verified: these scenarios no longer fail on date-related
+   grounds (03 and 29 pass cleanly on a valid date; 04/05/12/24/25/19 now
+   fail for the real, separate reason in item 12 above, not the date).
+   13_large_party_no_cap and 10_multi_topic_single_call never actually had
+   stale dates (both used 2026-09-20, already valid) -- they were
+   miscategorized as date issues originally; 13 turned out flaky (see item
+   15), 10 is a real item-12 case.
+
+14. Sheets client thread-safety bug, introduced and fixed same session
+   (2026-09-19). app/services/sheets_client.py's earlier latency fix (this
+   file, item 10 above) cached one `service` object per process to avoid a
+   fresh OAuth token exchange per call -- but googleapiclient's service
+   shares one httplib2 HTTP connection, not safe for concurrent use across
+   threads. book_table's live write (on the call's critical path) can
+   genuinely overlap with a previous turn's still-in-flight, fire-and-
+   forget LogInteractionEnforcer background backfill write (both run via
+   asyncio.to_thread). Confirmed live via the eval suite (05_reservation_
+   missing_name, 20260919_datefix run): book_table's write and a
+   log_interaction backfill write failed within 13ms of each other, both
+   with `ssl.SSLError: [SSL] record layer failure` -- the signature of two
+   threads interleaving reads/writes on one TLS socket. Reproduced directly
+   with a standalone concurrent-write stress test (not the eval suite) and
+   fixed: cache only the Credentials (safe to share, no persistent
+   connection, refreshes its own token), build a fresh service/HTTP
+   connection per call. Verified: old pattern failed 1/3 stress runs with
+   the identical error; fixed pattern passed 5/5 (40 total concurrent
+   writes, 0 errors). Status: fixed and verified, not just theorized.
+
+15. Eval suite has real run-to-run noise independent of code correctness --
+   worth knowing before treating any single run's pass/fail count as
+   authoritative. Running the identical suite 3x in a row (2026-09-19)
+   flipped results on several scenarios with no code change in between:
+   08_emergency_call (FAIL then PASS -- the FAIL run's judge complained
+   the bot "did not specify urgency clearly" even though the actual reply
+   was "Call 112 immediately..." -- judge inconsistency, not a real bug),
+   13_large_party_no_cap (FAIL, PASS, FAIL), 21_audio_standalone_yes_
+   stays_english (PASS, PASS, FAIL -- the FAIL run's bot reply "What name
+   should I put the reservation under?" was the objectively correct next
+   question; the judge just didn't like it that run), 29_midflow_guest_
+   count_change (FAIL/stale-date, PASS, FAIL -- the second FAIL's judge
+   complaint "does not acknowledge the name provided" contradicts the
+   brevity instruction's own "don't restate what they said" rule -- likely
+   judge noise, not a real regression). Source is probably some
+   combination of LLM sampling temperature (not pinned to 0) and gpt-4o-mini
+   judge inconsistency (a known LLM-as-judge limitation, not unique to this
+   project). Distinguish this from item 12's failures, which reproduced
+   identically (same wrong bot text) across all 3 runs -- that consistency
+   is what makes item 12 a real signal rather than noise.
+
 9. "Bulk catering prices" not reliably treated as a take-a-message case.
    Found running the full eval suite 2026-09-19 (eval_scenarios/eval-runs/
    20260919_021305, scenario 14_leading_zero_phone) -- confirmed
