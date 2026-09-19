@@ -88,6 +88,35 @@ def sarvam_user_speech(voice_cfg: dict, sample_rate: int):
     )
 
 
+def judge_llm(config: dict):
+    """Build the eval judge's LLM service with temperature pinned to 0.
+
+    pipecat.evals.judge.EvalJudge's built-in `openai_service()` factory (see
+    pipecat/evals/services.py) never sets a temperature -- it only ever
+    passes `model=`, so OpenAI's own API default (1.0, non-deterministic)
+    applies to every verdict. Confirmed live: running the identical
+    29-scenario suite 3x in a row with zero code changes flipped several
+    verdicts (08, 13, 21, 29 -- see SESSION_ISSUES.txt item 15), including
+    one case where turn 1 of 29_midflow_guest_count_change got the exact
+    same bot reply text ("How many guests will be joining you?") judged
+    "yes, acknowledges the name" in one run and "no, does not acknowledge
+    the name" in another -- same criterion, same conversation, same reply,
+    opposite verdict. That's pure judge sampling noise, not the bot's
+    behavior actually changing. temperature=0 doesn't make the API
+    perfectly bit-for-bit deterministic (OpenAI's own docs note that), but
+    it removes the deliberate randomness that's driving this, which is the
+    dominant cause here.
+    """
+    from pipecat.services.openai.llm import OpenAILLMService
+
+    return OpenAILLMService(
+        settings=OpenAILLMService.Settings(
+            model=config.get("model", "gpt-4o"),
+            temperature=0,
+        )
+    )
+
+
 def openai_bot_transcription(config: dict, sample_rate: int):
     """Build an STT-shaped object that batch-transcribes bot audio via OpenAI's
     REST Whisper endpoint.

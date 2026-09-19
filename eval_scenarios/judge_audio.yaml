@@ -1,6 +1,7 @@
 modality: audio
 eval:
-  service: openai
+  # temperature=0 for deterministic verdicts -- see judge_text.yaml.
+  factory: "eval_scenarios.services.judge_llm"
   model: gpt-4o-mini
 transcription:
   factory: "eval_scenarios.services.openai_bot_transcription"

@@ -1,4 +1,8 @@
 modality: text
 eval:
-  service: openai
+  # temperature=0 for deterministic verdicts -- see judge_llm's own
+  # docstring in eval_scenarios/services.py for why (the built-in
+  # service: openai path never sets one, so the API's own default of 1.0
+  # applies, confirmed causing real verdict flakiness).
+  factory: "eval_scenarios.services.judge_llm"
   model: gpt-4o-mini
