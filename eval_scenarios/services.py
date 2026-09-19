@@ -1,48 +1,8 @@
-"""Custom TTS/STT factories for audio-modality eval scenarios.
+"""TTS/STT factories for audio-modality eval scenarios.
 
-The eval harness's built-in audio services (Kokoro for user speech, Whisper/
-Moonshine for judge transcription) all run local ONNX/torch models that aren't
-installed in this project's venv (see requirements.txt — nothing beyond
-pipecat-ai[openai,silero,websocket,sarvam,runner] is pulled in for this repo,
-and this file deliberately doesn't add new dependencies for a test harness,
-mirroring the RNNoise lesson about not casually adding heavyweight ML deps).
-
-Instead this reuses services already in requirements.txt, authenticated with
-the same credentials the bot itself uses (loaded via app.config.settings):
-
-- `sarvam_user_speech` synthesizes the caller's scripted turns with Sarvam's
-  own HTTP TTS (bulbul:v2) — real Hindi/English speech, not a generic voice,
-  so it's a meaningful test of the bot's actual SarvamSTTService (hi-IN,
-  mode="codemix") rather than a proxy.
-- `openai_bot_transcription` transcribes the bot's synthesized replies with
-  OpenAI's hosted Whisper endpoint (HTTP, not local) so the judge can assert
-  on what the bot's real TTS audio actually said. This is a small duck-typed
-  batch-transcription object, NOT pipecat's own OpenAISTTService — that
-  service's run_stt() is built for OpenAI's realtime WebSocket API, and
-  calling it once on a single captured buffer outside a real streaming
-  pipeline rejects the harness's raw PCM as an unsupported audio format
-  (confirmed live: see 16_audio_english_stays_english.yaml's docstring for
-  why every audio scenario kept judge.modality as text to work around this).
-  pipecat.evals.transcribe.EvalTranscriber only ever calls
-  `run_stt(pcm) -> AsyncGenerator[TranscriptionFrame]` on whatever a
-  transcription factory returns, so the fix here sidesteps the realtime API
-  entirely: wrap the raw PCM in a WAV header and call OpenAI's batch
-  audio.transcriptions.create endpoint directly (the same call verified
-  working against a real call recording during a live debugging session).
-
-Referenced from scenario YAML via the `factory:` escape hatch documented in
-pipecat.evals.speech / pipecat.evals.transcribe, e.g.:
-
-    user:
-      modality: audio
-      speech:
-        factory: "eval_scenarios.services.sarvam_user_speech"
-        language: hi-IN
-
-    judge:
-      modality: audio
-      transcription:
-        factory: "eval_scenarios.services.openai_bot_transcription"
+The harness's built-in audio services need local ONNX/torch models not in
+this venv, so these reuse hosted services already in requirements.txt
+(Sarvam TTS, OpenAI Whisper). Referenced from scenario YAML via `factory:`.
 """
 
 from __future__ import annotations
@@ -58,16 +18,11 @@ from app.config.settings import settings  # noqa: E402
 
 
 def sarvam_user_speech(voice_cfg: dict, sample_rate: int):
-    """Build a real Sarvam HTTP TTS service to synthesize scripted caller turns.
+    """Build a real Sarvam HTTP TTS service for scripted caller turns.
 
-    `voice_cfg.language` picks the target language (e.g. "hi-IN", "en-IN");
-    `voice_cfg.voice` picks a bulbul:v3 speaker (default "priya"). bulbul:v2
-    is deprecated on Sarvam's live API as of this writing (confirmed via a
-    real call: "Model 'bulbul:v2' has been deprecated. Please use
-    'bulbul:v3' instead.") — v3's speaker roster is disjoint from v2's, so
-    the voice picked here must be a v3 name (aditya/ritu/priya/neha/rahul/
-    pooja/rohan/simran/kavya/... — see SarvamHttpTTSService's docstring),
-    not a v2 one like "anushka".
+    Voice must be a bulbul:v3 speaker name (e.g. priya, aditya, ritu) —
+    bulbul:v2 is deprecated on Sarvam's API and its speaker names aren't
+    valid on v3.
     """
     import aiohttp
 
@@ -89,59 +44,13 @@ def sarvam_user_speech(voice_cfg: dict, sample_rate: int):
 
 
 def judge_llm(config: dict):
-    """Build the eval judge's LLM service with temperature pinned to 0 where
-    the model actually allows that.
+    """Build the eval judge's LLM with temperature=0 for determinism.
 
-    pipecat.evals.judge.EvalJudge's built-in `openai_service()` factory (see
-    pipecat/evals/services.py) never sets a temperature -- it only ever
-    passes `model=`, so OpenAI's own API default (1.0, non-deterministic)
-    applies to every verdict. Confirmed live: running the identical
-    29-scenario suite 3x in a row with zero code changes flipped several
-    verdicts (08, 13, 21, 29 -- see SESSION_ISSUES.txt item 15), including
-    one case where turn 1 of 29_midflow_guest_count_change got the exact
-    same bot reply text ("How many guests will be joining you?") judged
-    "yes, acknowledges the name" in one run and "no, does not acknowledge
-    the name" in another -- same criterion, same conversation, same reply,
-    opposite verdict. That's pure judge sampling noise, not the bot's
-    behavior actually changing. temperature=0 doesn't make the API
-    perfectly bit-for-bit deterministic (OpenAI's own docs note that), but
-    it removes the deliberate randomness that's driving this, which is the
-    dominant cause here.
-
-    Not every model accepts an explicit temperature, though: gpt-5.6-luna
-    and gpt-5-mini both confirmed live with a hard 400 ("Unsupported value:
-    'temperature' does not support 0 with this model. Only the default (1)
-    value is supported.") -- every judge call on those models would
-    otherwise fail and get silently counted as verdict "no" (see
-    EvalJudge._call_judge's exception handling), corrupting every scenario's
-    results, not just flaking one assertion. This isn't one named model's
-    quirk -- it's the whole gpt-5 family restricting sampling params the
-    same way (unlike gpt-4o/gpt-4o-mini, both confirmed working with
-    temperature=0), so detect by prefix rather than hardcoding today's two
-    known cases. temperature=0's determinism win is simply unavailable on
-    these models -- use gpt-4o/gpt-4o-mini instead if verdict stability
-    matters more than a specific gpt-5 model's judgment quality.
-
-    gpt-5-family models also need reasoning_effort pinned low. Confirmed
-    live: EvalJudge hard-codes max_tokens=200 for every judge call (not
-    exposed through this factory hook -- pipecat.evals.judge.EvalJudge.
-    from_config only ever passes the service through, see its own source),
-    and gpt-5-mini spent the *entire* 200-token budget on hidden reasoning
-    tokens before ever emitting the visible JSON verdict -- confirmed via
-    the raw API: max_completion_tokens=200 with no reasoning_effort set
-    returned content='' (finish_reason='length', reasoning_tokens=200).
-    Every single scenario failed with "judge returned empty response",
-    including ones with an obviously-correct bot reply (02, 03, 06, 07, all
-    previously rock-solid) -- a worse failure mode than the temperature 400
-    above because it produces no error, just silent uniform "no" verdicts.
-    reasoning_effort="minimal" (confirmed: 0 reasoning tokens, clean JSON,
-    comfortably inside the 200-token budget) fixes it. Note this model's
-    valid values are minimal/low/medium/high -- "none" isn't one of them
-    and 400s (that's gpt-5.6-luna's requirement elsewhere in this codebase,
-    e.g. app/main.py's _build_llm -- the two gpt-5-family models don't even
-    agree with each other here, so don't assume any two "gpt-5*" models
-    share a valid reasoning_effort set, just that all of them need *some*
-    low setting to leave room for actual output in a small token budget.
+    Repeated identical runs flipped verdicts under the API's default
+    temperature=1 (pure sampling noise, not real bot behavior change).
+    gpt-5-family models reject temperature=0 (400 error) and need
+    reasoning_effort="minimal" instead, or their 200-token judge budget
+    gets consumed by hidden reasoning before any output.
     """
     from pipecat.services.openai.llm import OpenAILLMService
 
@@ -155,18 +64,70 @@ def judge_llm(config: dict):
     return OpenAILLMService(settings=OpenAILLMService.Settings(**settings_kwargs))
 
 
-def openai_bot_transcription(config: dict, sample_rate: int):
-    """Build an STT-shaped object that batch-transcribes bot audio via OpenAI's
-    REST Whisper endpoint.
+class _EnsembleJudgeService:
+    """Wraps two judge LLM services behind one run_inference(), used as a
+    single unit by EvalJudge.
 
-    Not pipecat's OpenAISTTService — see this module's docstring for why that
-    one doesn't work here (it's a realtime-WebSocket service, not a one-shot
-    batch transcriber, and rejects the harness's captured PCM as an
-    unsupported format when called directly). EvalTranscriber only calls
-    `run_stt(pcm)` on whatever this factory returns and iterates it as an
-    async generator of frames (see transcribe.py) — nothing else about
-    pipecat's STTService interface is exercised, so this small object
-    implementing just that one method is enough.
+    Trusts the primary's "yes" outright, but only trusts a "no" if the
+    secondary doesn't contradict it — a false "no" wrongly fails a correct
+    bot reply, the costliest judge mistake. gpt-4o-mini is the primary
+    (more consistent in testing); gpt-5-mini is only a safety net.
+    """
+
+    def __init__(self, primary, secondary):
+        self._primary = primary
+        self._secondary = secondary
+
+    async def run_inference(self, *, context, max_tokens, system_instruction):
+        from loguru import logger
+
+        from pipecat.evals.judge import _parse_verdict
+
+        primary_response = await self._primary.run_inference(
+            context=context, max_tokens=max_tokens, system_instruction=system_instruction
+        )
+        primary_verdict = _parse_verdict(primary_response or "")
+        if primary_verdict.verdict != "no":
+            return primary_response
+
+        try:
+            secondary_response = await self._secondary.run_inference(
+                context=context, max_tokens=max_tokens, system_instruction=system_instruction
+            )
+            secondary_verdict = _parse_verdict(secondary_response or "")
+        except Exception as e:
+            logger.debug("Ensemble judge: secondary check failed ({}), keeping primary's no", e)
+            return primary_response
+
+        if secondary_verdict.verdict == "yes":
+            logger.info(
+                "Ensemble judge: primary said no, secondary disagreed (yes) -- overriding. "
+                "primary_reason={!r} secondary_reason={!r}",
+                primary_verdict.reason,
+                secondary_verdict.reason,
+            )
+            return secondary_response
+
+        return primary_response
+
+
+def ensemble_judge_llm(config: dict):
+    """Default judge factory: gpt-4o-mini as primary, gpt-5-mini consulted
+    only to double-check a "no" — see _EnsembleJudgeService's docstring.
+
+    Config keys: `model` (default gpt-4o-mini), `secondary_model`
+    (default gpt-5-mini).
+    """
+    primary = judge_llm({"model": config.get("model", "gpt-4o-mini")})
+    secondary = judge_llm({"model": config.get("secondary_model", "gpt-5-mini")})
+    return _EnsembleJudgeService(primary, secondary)
+
+
+def openai_bot_transcription(config: dict, sample_rate: int):
+    """Batch-transcribe bot audio via OpenAI's REST Whisper endpoint.
+
+    Not pipecat's OpenAISTTService — that's realtime-WebSocket only and
+    rejects captured PCM as an unsupported format when called directly.
     """
     import io
     import wave
