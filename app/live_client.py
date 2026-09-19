@@ -1,37 +1,26 @@
 """Browser-based WebRTC test client at /live — place a real call against
-this exact deployed bot for testing without per-minute Vobiz/telephony
-charges.
+this exact deployed bot without per-minute telephony charges.
 
-Gated behind the same HTTP Basic auth as /admin (see app/admin/auth.py):
-this hits the real STT/LLM/TTS providers just like a phone call would, so an
-open /live on a public URL would let anyone spend API credits for free, not
-just view a page.
+Gated behind /admin's HTTP Basic auth since this hits real STT/LLM/TTS
+providers. Talks directly to pipecat's POST /api/offer instead of its
+prebuilt client UI, since that one refuses any transport other than the
+one the process was launched with. Non-trickle ICE.
 
-Talks directly to pipecat's own POST /api/offer (registered automatically by
-pipecat.runner.run once the `webrtc` extra — aiortc — is installed; see
-requirements.txt and the "webrtc" entry in main.py's transport_params)
-instead of pipecat's prebuilt client UI (`pipecat-ai-prebuilt`) or its
-client-js `/start` flow: `_setup_unified_start_route` refuses any transport
-other than the one this process was launched with (`-t exotel` in
-production), so every WebRTC session would get rejected before it began.
-`/api/offer` has no such restriction — a plain RTCPeerConnection talking to
-it directly works regardless of which telephony transport this deployment
-is pinned to.
-
-Non-trickle ICE (wait for gathering to finish, then send one offer) rather
-than streaming candidates over the PATCH endpoint — simpler to get right
-without a real device to test against, at the cost of a ~1-3s connect delay.
-Fine for a test tool; a STUN-only ICE config (no TURN) is also fine here for
-the same reason, but means this won't connect from behind every restrictive
-corporate NAT — it will from a normal home/office network.
+Uses Twilio TURN credentials (via /live/ice-servers, fetched fresh per page
+load) rather than STUN alone — see twilio_client.fetch_ice_servers_async's
+docstring for why: on Railway, plain STUN isn't enough, since the bot's
+server-side aiortc peer has no publicly reachable address to be reflexive
+about in the first place. app/main.py patches the matching server-side ICE
+servers onto pipecat's SmallWebRTCRequestHandler at startup.
 """
 
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.admin.auth import require_admin
+from app.services.twilio_client import fetch_ice_servers_async
 
 _PAGE = """<!doctype html>
 <html>
@@ -109,8 +98,23 @@ _PAGE = """<!doctype html>
       peerConnection.addEventListener('icegatheringstatechange', check);
       // Some networks never report "complete" (no reachable STUN server) --
       // proceed with whatever candidates gathered so far rather than hang.
-      setTimeout(resolve, 3000);
+      // 5s, not 3: a TURN allocation round-trip is slower than plain STUN.
+      setTimeout(resolve, 5000);
     });
+  }
+
+  async function fetchIceServers() {
+    try {
+      const response = await fetch('/live/ice-servers');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+      if (Array.isArray(data.iceServers) && data.iceServers.length) {
+        return data.iceServers;
+      }
+    } catch (e) {
+      log('Could not fetch TURN credentials, falling back to STUN-only: ' + e.message);
+    }
+    return [{ urls: 'stun:stun.l.google.com:19302' }];
   }
 
   function disconnect() {
@@ -139,16 +143,10 @@ _PAGE = """<!doctype html>
       return;
     }
 
-    pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-    });
-    // pipecat's SmallWebRTCTransport passively waits for the *client* to
-    // open a data channel (see connection.py's `@self._pc.on("datachannel")`)
-    // and logs "Data channel not established within 10s" if none ever shows
-    // up -- confirmed live 2026-09-19, harmless to audio (the transport's
-    // separate audio-track path is unaffected) but noisy. This client
-    // doesn't otherwise need a data channel; opening one just satisfies
-    // that wait.
+    const iceServers = await fetchIceServers();
+    pc = new RTCPeerConnection({ iceServers });
+    // pipecat's transport waits for the client to open a data channel and
+    // logs a noisy warning otherwise; not otherwise needed here.
     pc.createDataChannel('events');
     // One bidirectional audio transceiver: addTrack alone is enough to both
     // send our mic and receive the bot's reply on the same m-line.
@@ -219,3 +217,7 @@ def register_live_test_client(app: FastAPI) -> None:
     @app.get("/live", dependencies=[Depends(require_admin)], include_in_schema=False)
     async def live_test_client() -> HTMLResponse:
         return HTMLResponse(_PAGE)
+
+    @app.get("/live/ice-servers", dependencies=[Depends(require_admin)], include_in_schema=False)
+    async def live_ice_servers() -> JSONResponse:
+        return JSONResponse({"iceServers": await fetch_ice_servers_async()})

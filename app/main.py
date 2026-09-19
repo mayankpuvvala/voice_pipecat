@@ -1,22 +1,7 @@
 """Entrypoint. Run with `python -m app.main -t <provider>` where <provider>
-is one of exotel/twilio/telnyx/plivo — see README.md / Dockerfile's
-TELEPHONY_TRANSPORT env var for how this is picked without editing code.
-
-The Pipecat dev runner (`pipecat.runner.run.main`) starts a local FastAPI
-server. Every supported provider connects over a plain WebSocket (`/ws`)
-speaking that provider's own media-streaming protocol — Exotel's is the
-production target (configured as the Voicebot Applet in Exotel's App
-Bazaar); the others exist so testing/dev can use a free-trial or
-pay-as-you-go number while Exotel/TRAI setup is still in progress. See
-README.md for the call path from Jio → Exotel → this server.
-
-Vobiz is also wired up (`/answer` + `/hangup` below) independently of `-t`:
-its WebSocket protocol is wire-compatible with Plivo's, so it needs no CLI
-transport flag of its own — a Vobiz call auto-detects as "plivo" and gets
-picked up by `_create_vobiz_transport()` in `bot()` regardless of which
-`-t` value the process was started with. Point a Vobiz Application's
-"Primary answer URL" at `<this server>/answer` and "Hangup URL" at
-`<this server>/hangup`; it can run alongside Exotel on the same deployment.
+is one of exotel/twilio/telnyx/plivo/vobiz — see README.md for the
+TELEPHONY_TRANSPORT env var and the Jio → Exotel → this server call path.
+Vobiz auto-detects as "plivo" and is routed via `_create_vobiz_transport()`.
 """
 
 from __future__ import annotations
@@ -40,9 +25,11 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from aiortc import RTCIceServer
 from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport, parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
+from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequestHandler
 from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.evals.transport import EvalTransportParams
@@ -68,16 +55,40 @@ from app.pipeline.transcript import build_transcript
 from app.pipeline.tts_language_switcher import TTSLanguageSwitcher
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
 from app.services.resilient_stt import ResilientSarvamSTTService
-from app.services.twilio_client import lookup_caller_number
+from app.services.twilio_client import fetch_ice_servers_sync, lookup_caller_number
 from app.tools.end_call import end_call
 from app.tools.reservations import book_table, check_availability
 
-# pipecat.runnroutes before calling main() — see that module's docstring.
+# pipecat.runner.run exports `app` as an extension point for adding
+# routes before main() — see that module's docstring.
 import pipecat.runner.run as pipecat_runner
 from pipecat.runner.run import app as runner_app
 from pipecat.runner.run import main as run_dev_server
 
 pipecat_runner._setup_frontend_routes = lambda app: None
+
+# /live (browser WebRTC test client) ICE servers: pipecat's dev runner builds
+# its SmallWebRTCRequestHandler with ice_servers=None (no CLI/env hook to
+# change this), so the bot's server-side aiortc peer only ever gathers host
+# candidates -- its own private container IP. On Railway that's unreachable
+# from any browser, on any network; that's the actual cause of /live's
+# "Connection state: failed", not a client-side NAT issue. Patched here since
+# there's no other extension point, same spirit as _setup_frontend_routes
+# above. Twilio TURN credentials (already using this app's own account) are
+# fetched once, synchronously, before any event loop exists yet -- see
+# fetch_ice_servers_sync's docstring for the ~24h token lifetime tradeoff.
+_WEBRTC_ICE_SERVERS = [
+    RTCIceServer(urls=s["urls"], username=s.get("username"), credential=s.get("credential"))
+    for s in fetch_ice_servers_sync()
+]
+_original_webrtc_handler_init = SmallWebRTCRequestHandler.__init__
+
+
+def _webrtc_handler_init_with_ice_servers(self, *args, ice_servers=None, **kwargs) -> None:
+    _original_webrtc_handler_init(self, *args, ice_servers=ice_servers or _WEBRTC_ICE_SERVERS, **kwargs)
+
+
+SmallWebRTCRequestHandler.__init__ = _webrtc_handler_init_with_ice_servers
 
 
 @runner_app.get("/", include_in_schema=False)
@@ -86,9 +97,8 @@ async def root_status() -> dict:
         "status": "ok",
         "service": f"{ACTIVE_RESTAURANT.name} voice agent",
         "note": "See /admin for call logs, /live for a browser test call.",
-        # Railway injects this at runtime; lets us confirm which commit is
-        # actually live without dashboard access (see RAILWAY_GIT_COMMIT_SHA
-        # in Railway's docs).
+        # Railway injects this at runtime so we can confirm the live commit
+        # without dashboard access.
         "git_commit": os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown"),
     }
 
@@ -101,12 +111,9 @@ register_live_test_client(runner_app)
 async def vobiz_answer(request: Request) -> Response:
     """Vobiz's primary answer URL: return XML pointing it at our WS stream.
 
-    Vobiz's ``<Stream>`` protocol is Plivo's Audio Streaming API — same XML
-    attributes, same playAudio/clearAudio/media JSON shape (confirmed against
-    github.com/vobiz-ai/Vobiz-Python-Voice-API-Example) — but its handshake
-    doesn't carry the caller's number, so we thread it through as a query
-    param instead of relying on pipecat's provider-detected call_data. See
-    `bot()` below for how the stream is actually picked up.
+    Vobiz's <Stream> protocol is wire-compatible with Plivo's, but its
+    handshake doesn't carry the caller's number, so it's threaded through
+    as a query param instead. See `bot()` below for how the stream is picked up.
     """
     form = await request.form()
     caller = str(form.get("From", "") or "")
@@ -168,10 +175,8 @@ transport_params = {
         audio_in_enabled=True,
         audio_out_enabled=True,
     ),
-    # Browser test client at /live (app/live_client.py) -- talks straight to
-    # pipecat's own POST /api/offer, which create_transport() routes here via
-    # SmallWebRTCRunnerArguments. Requires the `webrtc` extra (aiortc) to be
-    # installed, see requirements.txt.
+    # Browser test client at /live (app/live_client.py). Requires the
+    # `webrtc` extra (aiortc) — see requirements.txt.
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
@@ -189,13 +194,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         caller_phone = await lookup_caller_number(getattr(call_data, "call_id", "") or "")
 
     worker_handle = WorkerHandle()
-    # logInteraction is deliberately NOT a live tool: the model isn't asked to
-    # call it (see _LOGGING_TIMING_INSTRUCTION in prompts.py) — every reply
-    # calling it inline turned out to force a silent tool-call-only round
-    # before the actual spoken reply, doubling LLM round-trip latency on
-    # nearly every turn (confirmed via Langfuse trace 2026-09-19, still
-    # happening on the current model, not just older ones). LogInteractionEnforcer's
-    # background backfill logs every reply instead, off the live call's critical path.
+    # logInteraction is deliberately NOT a live tool — calling it inline
+    # doubled LLM latency per turn. LogInteractionEnforcer backfills it
+    # in the background instead, off the call's critical path.
     context = LLMContext(tools=[check_availability, book_table, end_call])
     call_state = {"transcript": ""}
 
@@ -225,15 +226,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         )
 
     def _build_llm() -> OpenAILLMService:
-        # Groq (Llama on LPU inference hardware) in place of OpenAI for the
-        # conversational LLM when a key is configured — cuts the 1-3s
-        # gpt-4o-mini completion time that's paid on every turn. GroqLLMService
-        # is a thin OpenAILLMService subclass (different base_url/model, same
-        # settings shape, same tool-calling), so retry_on_timeout, the
-        # isinstance(..., OpenAILLMService) check in on_pipeline_error below,
-        # and everything else here needs no further changes either way.
-        # openai_api_key/openai_model stay OpenAI-only regardless — see their
-        # comment in app/config/settings.py.
+        # Groq (Llama on LPU hardware) replaces OpenAI when configured, to
+        # cut the 1-3s gpt-5-mini completion time paid per turn. It's a thin
+        # OpenAILLMService subclass, so nothing else here needs to change.
         if settings.groq_api_key and settings.groq_enabled:
             return GroqLLMService(
                 api_key=settings.groq_api_key,
@@ -245,69 +240,32 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             )
         return OpenAILLMService(
             api_key=settings.openai_api_key,
-            # One extra retry on top of the OpenAI SDK's own default retries
-            # for transient/5xx errors — see BaseOpenAILLMService.get_chat_
-            # completions. A failure surviving both becomes a non-fatal
-            # ErrorFrame; on_pipeline_error below is what reacts to it.
+            # One extra retry on top of the OpenAI SDK's own retries; a
+            # failure surviving both becomes an ErrorFrame (see on_pipeline_error).
             retry_on_timeout=True,
             settings=OpenAILLMService.Settings(
                 model=settings.openai_model,
                 system_instruction=build_system_prompt(ACTIVE_RESTAURANT),
-                # gpt-5.6-luna 400s on /v1/chat/completions with function
-                # tools attached unless reasoning_effort is explicit --
-                # confirmed live 2026-09-19, see TROUBLESHOOTING.md's
-                # "Conversational LLM model choice" section. "none" matches
-                # this bot's actual usage (no multi-step reasoning needed
-                # for check_availability/book_table/log_interaction calls).
-                # Harmless passthrough if OPENAI_MODEL is ever overridden
-                # back to a non-reasoning model like gpt-5.4-nano -- but if
-                # switching to a different reasoning-capable model, re-check
-                # this still applies.
+                # gpt-5.6-luna 400s with function tools attached unless
+                # reasoning_effort is explicit — see TROUBLESHOOTING.md.
                 extra={"reasoning_effort": "none"},
             ),
         )
 
     def _build_tts() -> SarvamTTSService:
-        # Trying bulbul:v3 in place of Rumik (2026-09-18): it streams audio
-        # over its own WebSocket as each chunk is synthesized (see
-        # SarvamTTSService._receive_messages), instead of Rumik's one-shot
-        # HTTP call that waits for the whole utterance before anything plays
-        # — see app/services/rumik_tts.py, still here if this doesn't pan out.
-        # "shubh" is bulbul:v3's default speaker; listen via /live and swap
-        # for another name in SarvamTTSSpeakerV3 if it doesn't fit the persona.
-        #
-        # No retry/OpenAI-fallback wrapper here yet (unlike Rumik's) — a
-        # failure still ends the call cleanly via on_pipeline_error below,
-        # just without a second TTS vendor to fall back to first.
+        # bulbul:v3 streams audio over its own WebSocket per chunk, unlike
+        # Rumik's one-shot HTTP call (see app/services/rumik_tts.py). No
+        # retry/fallback wrapper here yet — a TTS failure just ends the call.
         return SarvamTTSService(
             api_key=settings.sarvam_api_key,
             settings=SarvamTTSService.Settings(
                 model="bulbul:v3",
-                # Starting locale only -- app/pipeline/tts_language_switcher.py
-                # flips this per reply to match whatever language the model
-                # actually replied in. Was hardcoded to Language.HI_IN for the
-                # whole call: confirmed live that pinned every reply's
-                # pronunciation to Hindi phonetics even for plain English
-                # replies (guest counts/numbers came out Hindi-accented) no
-                # matter what language the caller actually used.
+                # Starting locale only — tts_language_switcher.py flips this
+                # per reply to match the model's actual reply language.
                 language=Language.EN_IN,
-                # Default is 50 -- for a reply like "Sure! What name should I
-                # put the reservation under?" (52 chars) that's the entire
-                # sentence buffered before any audio starts, which throws
-                # away most of the streaming benefit over Rumik. Lower value
-                # means Sarvam starts synthesizing after fewer words, at some
-                # risk to prosody smoothness -- listen via /live and raise
-                # this back up if sentences sound choppy.
-                #
-                # 30 is Sarvam's actual server-side floor, not just a
-                # sensible-sounding number: anything below it makes the
-                # server reject the *entire* config message with a generic
-                # 422 "Input parameters has to be a valid dictionary" (no
-                # mention of which field), which kills the TTS connection
-                # on every reconnect attempt and silently ends the call.
-                # Confirmed 2026-09-18 by sending the raw config directly
-                # to wss://api.sarvam.ai/text-to-speech/ws — 15 reproduces
-                # the error every time, 30 does not.
+                # Lower than the default (50) so synthesis starts sooner,
+                # at some cost to prosody. 30 is Sarvam's server-side floor —
+                # going lower 422s and silently kills the call.
                 min_buffer_size=30,
             ),
         )
@@ -387,20 +345,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     @worker.event_handler("on_pipeline_error")
     async def on_pipeline_error(worker, frame):
-        # ErrorFrames travel upstream (push_error) and land here once they
-        # reach the pipeline's start. STT connect failures are handled by
-        # ResilientSarvamSTTService's own callback instead — Sarvam's
-        # per-chunk send/receive errors also surface as plain ErrorFrames and
-        # are common transient noise, not a reliable "STT is dead" signal.
+        # STT connect failures are handled by ResilientSarvamSTTService's
+        # own callback instead — per-chunk STT errors here are common noise.
         if isinstance(frame.processor, OpenAILLMService):
-            # An ErrorFrame here already means both the OpenAI SDK's own
-            # retries and retry_on_timeout above were exhausted for that turn.
+            # Means both the SDK's own retries and retry_on_timeout were exhausted.
             await call_health.note_llm_failure(frame.error)
         elif isinstance(frame.processor, SarvamTTSService):
-            # No retry/fallback wrapper for TTS yet (unlike Rumik's) — any
-            # error here ends the call immediately, no threshold. If this
-            # proves trigger-happy on transient Sarvam TTS blips, add a
-            # counter here the way note_llm_failure does for the LLM.
+            # No retry/fallback wrapper for TTS yet — any error ends the call.
             await call_health.degrade_silently("tts", frame.error)
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
@@ -423,13 +374,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 def _create_vobiz_transport(runner_args: WebSocketRunnerArguments, call_data) -> BaseTransport:
     """Build the transport for a Vobiz call by hand.
 
-    pipecat's create_transport() auto-detects Vobiz's stream as "plivo" (the
-    wire protocols match) and would build a PlivoFrameSerializer with
-    auto_hang_up=True, which raises unless real PLIVO_AUTH_ID/PLIVO_AUTH_TOKEN
-    creds are set — this app has no Plivo account, so that always fails. We
-    don't need Plivo's REST hangup call anyway: our /answer XML sets
-    keepCallAlive="false", so Vobiz ends the call as soon as we close this
-    WebSocket (EndFrame does that already, same as the Exotel/Twilio paths).
+    create_transport() would build a PlivoFrameSerializer with
+    auto_hang_up=True, which requires Plivo creds this app doesn't have.
+    Not needed anyway — /answer's keepCallAlive="false" already ends the
+    call when we close the WebSocket.
     """
     query = runner_args.websocket.query_params
     call_data.from_number = query.get("from") or call_data.from_number
