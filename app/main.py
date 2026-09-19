@@ -91,6 +91,71 @@ def _webrtc_handler_init_with_ice_servers(self, *args, ice_servers=None, **kwarg
 SmallWebRTCRequestHandler.__init__ = _webrtc_handler_init_with_ice_servers
 
 
+def _detect_reasoning_effort_required() -> bool:
+    """One-time startup probe against this process's OWN configured
+    OPENAI_API_KEY/OPENAI_MODEL: does it need reasoning_effort='none' to
+    accept function tools, or does it reject reasoning_effort outright as an
+    unrecognized argument?
+
+    Confirmed live BOTH ways at different points (see TROUBLESHOOTING.md and
+    SESSION_ISSUES.txt) -- most likely explanation is this deployment's real
+    OPENAI_API_KEY/account resolves this model differently than whatever key
+    was used for earlier local testing, not that the API is flaky turn to
+    turn. Rather than hardcode one behavior and find out live on a real call
+    (confirmed: two separate production calls both hung up on this), ask the
+    actual configured key once at boot and cache the answer for the life of
+    this process. Defaults to True (the historically documented behavior) if
+    the probe itself is inconclusive (network blip, some other error) --
+    _build_llm's own retry_on_timeout and call_health's failure threshold
+    still backstop a wrong guess either way.
+    """
+    if not settings.openai_api_key:
+        return True
+
+    from openai import OpenAI as _SyncOpenAI
+
+    probe_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "_startup_probe",
+                "description": "probe",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    client = _SyncOpenAI(api_key=settings.openai_api_key)
+    try:
+        client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=probe_tools,
+            reasoning_effort="none",
+        )
+        logger.info(
+            "Startup probe: {} accepts reasoning_effort='none' -- using it for this process",
+            settings.openai_model,
+        )
+        return True
+    except Exception as e:
+        if "Unrecognized request argument supplied: reasoning_effort" in str(e):
+            logger.warning(
+                "Startup probe: {} rejects reasoning_effort on this account -- "
+                "omitting it for this process (see TROUBLESHOOTING.md)",
+                settings.openai_model,
+            )
+            return False
+        logger.warning(
+            "Startup reasoning_effort probe inconclusive ({}) -- defaulting to "
+            "required (current documented behavior)",
+            e,
+        )
+        return True
+
+
+_REASONING_EFFORT_REQUIRED = _detect_reasoning_effort_required()
+
+
 @runner_app.get("/", include_in_schema=False)
 async def root_status() -> dict:
     return {
@@ -246,9 +311,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             settings=OpenAILLMService.Settings(
                 model=settings.openai_model,
                 system_instruction=build_system_prompt(ACTIVE_RESTAURANT),
-                # gpt-5.6-luna 400s with function tools attached unless
-                # reasoning_effort is explicit — see TROUBLESHOOTING.md.
-                extra={"reasoning_effort": "none"},
+                # See _detect_reasoning_effort_required's docstring above --
+                # this account/model combo has been confirmed to need this
+                # explicit at some points and reject it outright at others,
+                # so it's decided by a real probe against the actual
+                # configured key at process startup, not hardcoded.
+                extra=({"reasoning_effort": "none"} if _REASONING_EFFORT_REQUIRED else {}),
             ),
         )
 
