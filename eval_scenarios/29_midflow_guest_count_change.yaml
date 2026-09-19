@@ -4,6 +4,8 @@
 # instruction). The check_availability args below confirm the corrected
 # guest count (5, not the originally-stated 3) actually propagated through
 # to the tool call rather than the bot silently keeping the first number.
+# Date bumped 2026-09-19 (was 2026-09-05, now past -- see README's Eval
+# suite section).
 name: 29_midflow_guest_count_change
 judge: !include judge_text.yaml
 turns:
@@ -21,12 +23,12 @@ turns:
     expect:
       - event: response
         eval: "goes with the corrected count of five, not three, and asks for the next missing detail without restarting or re-asking for the name"
-  - user: "Tomorrow, 2026-09-05, at 1 PM."
+  - user: "Tomorrow, 2026-09-20, at 1 PM."
     send_after: { event: llm_response, delay_ms: 500 }
     expect:
       - event: function_call
         calls:
           - name: check_availability
-            args: { date: "2026-09-05", time: "13:00", guests_count: "5" }
+            args: { date: "2026-09-20", time: "13:00", guests_count: "5" }
       - event: response
         eval: "reads back the date, time, and a guest count of five and asks the caller to confirm before booking"

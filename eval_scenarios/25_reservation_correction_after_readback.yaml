@@ -4,15 +4,17 @@
 # time; this covers the caller catching and correcting a detail themselves
 # after hearing a clean read-back, which is a different path (no book_table
 # should fire until the corrected version is confirmed).
+# Date bumped 2026-09-19 (was 2026-09-05, now past -- see README's Eval
+# suite section).
 name: 25_reservation_correction_after_readback
 judge: !include judge_text.yaml
 turns:
-  - user: "I'd like to book a table for tomorrow, 2026-09-05, at 7 PM for four people. Name is ZZ-EVALTEST Divya."
+  - user: "I'd like to book a table for tomorrow, 2026-09-20, at 7 PM for four people. Name is ZZ-EVALTEST Divya."
     expect:
       - event: function_call
         calls:
           - name: check_availability
-            args: { date: "2026-09-05", time: "19:00" }
+            args: { date: "2026-09-20", time: "19:00" }
       - event: response
         eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
   - user: "Actually, can we make it 8 PM instead?"

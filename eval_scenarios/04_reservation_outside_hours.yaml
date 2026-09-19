@@ -1,7 +1,10 @@
+# Date bumped 2026-09-19 (was Monday 2026-09-07, now past -- see README's
+# Eval suite section). Must stay a real Monday (spice_route_kitchen is
+# closed Mondays -- see app/pipeline/hours.py's weekday check).
 name: 04_reservation_outside_hours
 judge: !include judge_text.yaml
 turns:
-  - user: "I'd like to book a table for Monday, 2026-09-07, at 8 PM, for two people. My name is ZZ-EVALTEST Priya."
+  - user: "I'd like to book a table for Monday, 2026-09-21, at 8 PM, for two people. My name is ZZ-EVALTEST Priya."
     expect:
       - event: response
         eval: "does not confirm a reservation is booked, and explains the restaurant is closed that day (Monday) rather than staying silent about why"

@@ -29,28 +29,39 @@ from app.config.settings import settings
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Built once, reused for the life of the process — not per call. Rebuilding
-# this on every check_availability/book_table/log_interaction call meant a
-# fresh service-account OAuth token exchange (a real network round trip to
-# oauth2.googleapis.com) plus a new API client on every single tool call,
-# even though check_availability/book_table sit directly on the live call's
-# critical path. `Credentials` refreshes its own access token as needed, so
-# one long-lived instance is the intended usage, not a staleness risk.
-_service = None
+# Credentials (not the full service/http connection) are cached at module
+# level and reused for the life of the process. Caching the whole `service`
+# object here previously -- to avoid a fresh service-account OAuth token
+# exchange (a real network round trip to oauth2.googleapis.com) on every
+# single check_availability/book_table/log_interaction call -- caused a real
+# regression instead: `build()`'s service shares one underlying httplib2 HTTP
+# connection, which is NOT safe for concurrent use from multiple threads.
+# append_row runs off the event loop via asyncio.to_thread (see this
+# module's own docstring), and book_table's live write can genuinely overlap
+# in time with a *previous* turn's still-in-flight LogInteractionEnforcer
+# background backfill write (fire-and-forget, never awaited -- see
+# app/pipeline/logging_enforcer.py) -- confirmed live via the eval suite:
+# both writes failed at the same instant with `ssl.SSLError: [SSL] record
+# layer failure`, the signature of two threads interleaving reads/writes on
+# the same TLS socket. Credentials objects don't hold a persistent
+# connection open (just a cached bearer token, refreshed on demand), so
+# sharing one is safe -- building a fresh `service`/HTTP connection per call
+# from those cached credentials keeps the token-exchange avoidance without
+# the concurrency hazard.
+_credentials = None
 
 
 def _client():
-    global _service
-    if _service is None:
+    global _credentials
+    if _credentials is None:
         info = {
             "type": "service_account",
             "client_email": settings.google_service_account_email,
             "private_key": settings.google_service_account_private_key,
             "token_uri": "https://oauth2.googleapis.com/token",
         }
-        creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
-        _service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    return _service
+        _credentials = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
+    return build("sheets", "v4", credentials=_credentials, cache_discovery=False)
 
 
 def append_row(sheet_name: str, row: dict[str, Any]) -> None:

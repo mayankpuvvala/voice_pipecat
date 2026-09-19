@@ -1,3 +1,5 @@
+# Date bumped 2026-09-19 (was September 5th, now past -- see README's Eval
+# suite section).
 name: 19_audio_reservation_end_to_end
 # See 16_audio_english_stays_english.yaml for why judge.modality is text.
 user: !include user_audio_en.yaml
@@ -8,13 +10,13 @@ turns:
     send_after: { event: llm_response, delay_ms: 800 }
   - user: "Two people."
     send_after: { event: llm_response, delay_ms: 800 }
-  - user: "Tomorrow, September 5th, at 8 PM."
+  - user: "Tomorrow, September 20th, at 8 PM."
     send_after: { event: llm_response, delay_ms: 800 }
     expect:
       - event: function_call
         calls:
           - name: check_availability
-            args: { date: "2026-09-05" }
+            args: { date: "2026-09-20" }
       - event: response
         eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
   - user: "Yes, that's right."

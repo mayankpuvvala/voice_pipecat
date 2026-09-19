@@ -1,7 +1,9 @@
+# Date bumped 2026-09-19 (was 2026-09-09, now past -- see README's Eval
+# suite section).
 name: 05_reservation_missing_name
 judge: !include judge_text.yaml
 turns:
-  - user: "I want a table for 2026-09-09 at 8 PM, for two people."
+  - user: "I want a table for 2026-09-23 at 8 PM, for two people."
     expect:
       - event: response
         eval: "asks the caller for their name before booking, and does not confirm a reservation is booked yet"

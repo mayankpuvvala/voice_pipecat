@@ -1,3 +1,8 @@
+# Expected date bumped 2026-09-19 (was 2026-09-05, now past -- see README's
+# Eval suite section). This scenario has no hardcoded date in the caller's
+# own text ("tomorrow" is left relative on purpose, that's the point of the
+# test) -- only the expected check_availability arg needed updating to
+# match whatever "tomorrow" actually resolves to when this suite runs.
 name: 12_relative_date_resolution
 judge: !include judge_text.yaml
 turns:
@@ -6,4 +11,4 @@ turns:
       - event: function_call
         calls:
           - name: check_availability
-            args: { date: "2026-09-05", time: "20:00" }
+            args: { date: "2026-09-20", time: "20:00" }
