@@ -89,7 +89,8 @@ def sarvam_user_speech(voice_cfg: dict, sample_rate: int):
 
 
 def judge_llm(config: dict):
-    """Build the eval judge's LLM service with temperature pinned to 0.
+    """Build the eval judge's LLM service with temperature pinned to 0 where
+    the model actually allows that.
 
     pipecat.evals.judge.EvalJudge's built-in `openai_service()` factory (see
     pipecat/evals/services.py) never sets a temperature -- it only ever
@@ -106,15 +107,29 @@ def judge_llm(config: dict):
     perfectly bit-for-bit deterministic (OpenAI's own docs note that), but
     it removes the deliberate randomness that's driving this, which is the
     dominant cause here.
+
+    Not every model accepts an explicit temperature, though: gpt-5.6-luna
+    and gpt-5-mini both confirmed live with a hard 400 ("Unsupported value:
+    'temperature' does not support 0 with this model. Only the default (1)
+    value is supported.") -- every judge call on those models would
+    otherwise fail and get silently counted as verdict "no" (see
+    EvalJudge._call_judge's exception handling), corrupting every scenario's
+    results, not just flaking one assertion. This isn't one named model's
+    quirk -- it's the whole gpt-5 family restricting sampling params the
+    same way (unlike gpt-4o/gpt-4o-mini, both confirmed working with
+    temperature=0), so detect by prefix rather than hardcoding today's two
+    known cases. temperature=0's determinism win is simply unavailable on
+    these models -- use gpt-4o/gpt-4o-mini instead if verdict stability
+    matters more than a specific gpt-5 model's judgment quality.
     """
     from pipecat.services.openai.llm import OpenAILLMService
 
-    return OpenAILLMService(
-        settings=OpenAILLMService.Settings(
-            model=config.get("model", "gpt-4o"),
-            temperature=0,
-        )
-    )
+    model = config.get("model", "gpt-4o")
+    settings_kwargs: dict = {"model": model}
+    if not model.startswith("gpt-5"):
+        settings_kwargs["temperature"] = 0
+
+    return OpenAILLMService(settings=OpenAILLMService.Settings(**settings_kwargs))
 
 
 def openai_bot_transcription(config: dict, sample_rate: int):
