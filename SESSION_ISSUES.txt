@@ -46,12 +46,109 @@ STILL OPEN
    Pre-existing, not caused by this session's other changes (logInteraction
    removal, TTS language switching, Sheets client fix) -- none of those
    touch reservation-field-gathering logic or _RESERVATION_TOOL_INSTRUCTION/
-   _BREVITY_INSTRUCTION in prompts.py. Not investigated further or fixed
-   this session -- this is real prompt-reliability work (likely needs
-   live iteration against compound, information-dense caller messages,
-   possibly a structural gate similar to turn_taking_guard.py/end_call.py's
-   pattern of not trusting prompt wording alone), out of scope for a
-   date-fixing pass. Flagging clearly rather than attempting a blind fix.
+   _BREVITY_INSTRUCTION in prompts.py.
+   UPDATE 2026-09-19: attempted a prompt fix -- strengthened
+   _RESERVATION_TOOL_INSTRUCTION in app/pipeline/prompts.py with explicit
+   "extract every detail already given, don't re-ask" and "never ask for
+   phone number" language. Tested directly against 04, 10, 12 (targeted
+   -s reruns, not just full-suite noise): NO CHANGE, identical wrong bot
+   text before and after ("What time would you like the reservation for?"
+   etc.), plus two NEW instances of the same family surfaced on the *name*
+   field too (24, 25 now ask "What name should I put the reservation
+   under?"/"What name should I hold the table under?" despite the name
+   being given in the same sentence). Prompt wording alone does not fix
+   this -- confirmed empirically, not assumed. Still open. Live-tested
+   hypothesis for why: reasoning_effort="none" is required for gpt-5.6-luna
+   to accept function tools at all (see item 8 below / TROUBLESHOOTING.md),
+   which may be suppressing exactly the careful multi-field extraction this
+   needs -- but that's a hard API constraint (tools attached -> reasoning_
+   effort must be "none", confirmed in TROUBLESHOOTING.md's own testing),
+   not something a prompt tweak can route around. Needs either a
+   structural fix (code-level re-extraction/retry, like turn_taking_guard.py/
+   end_call.py's pattern of not trusting prompt wording alone) or accepting
+   this as a known model-capability limit.
+   FINAL COUNT (eval-runs/20260919_ensemble, ensemble judge in place, see
+   item 16): 21/29 pass, 8 fail. Of the 8, 6 are this exact bug --
+   04, 10, 12, 13, 24, 25 -- each confirmed failing on the structural
+   function_call assertion (check_availability never even gets called),
+   not judge opinion. The other 2 failures that run are NOT this bug, see
+   their own notes: 19 is a real but separate STT mis-transcription (item
+   12's note above) and 21 is a separate judge miscalibration (item 16).
+   Still the single largest open item in this codebase. Next step if
+   picked back up: a structural fix, not another prompt wording attempt.
+
+16. Judge reliability -- three separate real bugs found and fixed same
+   session (2026-09-19), plus one found and NOT fixed (see below).
+   a) No temperature set on the judge LLM at all -- pipecat.evals.services.
+      openai_service() (the built-in factory) only ever passes `model=`.
+      OpenAI's own default (temperature=1) applied to every verdict, and
+      running the identical 29-scenario suite 3x in a row with zero code
+      changes flipped several verdicts on identical input (see item 15
+      below for specifics). Fixed: eval_scenarios/services.py's judge_llm()
+      sets temperature=0. Verified directly: the exact flip-flopping case
+      (29_midflow_guest_count_change turn 1) gave the same verdict 6/6
+      times afterward, vs. flipping within 2 runs before.
+   b) gpt-5-mini (set as judge model mid-session) rejects temperature=0
+      outright -- hard 400, "Unsupported value: 'temperature' does not
+      support 0 with this model." Every judge call on it would otherwise
+      fail and get silently counted as verdict "no" -- corrupting every
+      scenario's result, not just one assertion. Fixed: judge_llm() skips
+      temperature for any model name starting with "gpt-5" (detected by
+      prefix, not hardcoded to today's one known case, since this looks
+      like a family-wide restriction).
+   c) gpt-5-mini also spent its entire fixed 200-token judge budget
+      (EvalJudge hardcodes max_tokens=200, not exposed through the
+      factory: config hook) on hidden reasoning tokens, returning EMPTY
+      content -- confirmed via the raw API (max_completion_tokens=200,
+      no reasoning_effort set -> content='', finish_reason='length',
+      reasoning_tokens=200/200). Every judge call failed with "judge
+      returned empty response", including on scenarios with an obviously-
+      correct bot reply (02, 03, 06, 07 -- previously rock-solid across
+      every prior run) -- worse than bug (b) because it produced no error,
+      just silent uniform "no" verdicts suite-wide. Fixed:
+      reasoning_effort="minimal" (confirmed: 0 reasoning tokens, clean
+      JSON, comfortably inside budget). Note gpt-5-mini's valid values are
+      minimal/low/medium/high -- "none" isn't one of them and 400s, unlike
+      gpt-5.6-luna elsewhere in this codebase (app/main.py's _build_llm)
+      which requires exactly "none". The two gpt-5-family models don't
+      even agree with each other on this.
+   d) Even after (b) and (c), gpt-5-mini alone still produced verdicts
+      that contradicted its own printed reasoning -- confirmed on two real
+      scenarios: 21_audio_standalone_yes_stays_english ("...so it
+      satisfies." then verdict "no") and 28_complaint_taken_as_message
+      ("...should be yes." then verdict "no"). Not a strictness issue --
+      the model's own stated conclusion and its final answer disagreed
+      within the same response. Fixed with an ensemble, not a further
+      settings tweak: eval_scenarios/services.py's _EnsembleJudgeService
+      uses gpt-4o-mini (temperature=0, coherent/deterministic in every
+      test this session) as the real judge, and only calls gpt-5-mini to
+      double-check a "no" before trusting it -- a false "no" is the
+      costliest judge mistake (reports a real, correct bot reply as
+      broken), so that's the one verdict worth a second opinion. judge_
+      text.yaml / judge_audio.yaml both point at this by default now
+      (factory: eval_scenarios.services.ensemble_judge_llm). Verified: 28
+      and 29 (previously judge-noise failures) now pass; a real bug case
+      (04) is unaffected, still correctly fails.
+   e) NOT FIXED: found in the very same ensemble-judge run that verified
+      (d) -- 21_audio_standalone_yes_stays_english failed AGAIN, but for a
+      *different* reason this time: gpt-4o-mini itself (the ensemble's
+      primary) returned verdict "continue" for the bot's short, complete,
+      correct reply ("How many guests will there be?"), treating it as
+      still-streaming/incomplete rather than judging it outright. Nothing
+      more ever arrives (the bot's turn is done), so this times out at
+      60s into a FAIL. The ensemble doesn't catch this class -- it only
+      cross-checks an explicit "no", not a "continue" that never resolves,
+      because _EnsembleJudgeService's wrapper has no visibility into
+      whether more text is genuinely still coming. Would need retry-loop-
+      aware logic (e.g. escalate to secondary once a "continue" has been
+      returned for what's actually the final segment of a reply) to catch
+      this -- not attempted, flagging rather than guessing at a fix.
+
+FINAL EVAL SUITE STATE this session (2026-09-19, eval-runs/20260919_ensemble):
+21/29 pass. All 8 failures accounted for and categorized, none are
+mystery flakiness: 6 are item 12's reservation-parsing bug (04, 10, 12,
+13, 24, 25), 1 is a distinct real STT mis-transcription (19), 1 is a
+distinct judge miscalibration not yet fixed (21, item 16e above).
 
 13. Stale eval-suite dates (item 11) are now fixed. 03, 04, 05, 12, 19, 24,
    25, 29 all had their hardcoded reservation dates bumped to real future
