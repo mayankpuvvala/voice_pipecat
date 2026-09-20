@@ -138,6 +138,16 @@ def _fetch_calls_uncached(sheet_id: str) -> list[dict[str, Any]]:
         call["duration_secs"] = row.get("DurationSecs", "")
         call["transcript"] = row.get("Transcript", "")
         call["summary"] = row.get("Summary", "")
+        # Idle-triggered whole-transcript analysis (app/pipeline/
+        # idle_post_processor.py, runs in the voice-agent process, not this
+        # one) — more reliable than the live per-topic self-report above,
+        # but only exists once a call's actually been processed. Falls back
+        # to the live-derived values above until then.
+        if row.get("PostProcessedAt", "").strip():
+            post_rank = _CONFIDENCE_RANK.get(str(row.get("PostConfidence", "")).strip().lower(), 0)
+            if post_rank:
+                call["confidence_rank"] = post_rank
+            call["escalated"] = str(row.get("Escalated", "")).strip().lower() == "true"
 
     result = list(calls.values())
     result.sort(key=lambda c: c["timestamp"], reverse=True)

@@ -14,7 +14,7 @@ from loguru import logger
 from admin_service.auth import scoped_basic_auth
 from admin_service.config import RestaurantConfig, load_config, resolve_credentials
 from admin_service.contacts import contacts_csv
-from admin_service.dashboard import render_restaurant_page, render_super_admin_page
+from admin_service.dashboard import render_home_page, render_restaurant_page, render_super_admin_page
 from admin_service.sheets_reader import fetch_calls
 from admin_service.stats import compute_stats
 
@@ -64,6 +64,14 @@ async def super_admin_dashboard() -> HTMLResponse:
         calls = fetch_calls(cfg.google_sheet_id)
         entries.append((cfg, compute_stats(calls, cfg.minutes_allowed_per_month)))
     return HTMLResponse(render_super_admin_page(entries))
+
+
+@app.get("/", include_in_schema=False)
+async def home() -> HTMLResponse:
+    """Testing/staging control panel — every route in one place. No auth
+    (same posture as /healthz): it only lists names/paths, not call data;
+    each linked dashboard still requires its own login."""
+    return HTMLResponse(render_home_page(config))
 
 
 @app.get("/healthz", include_in_schema=False)

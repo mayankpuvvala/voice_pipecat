@@ -10,7 +10,7 @@ from html import escape
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from admin_service.config import RestaurantConfig
+from admin_service.config import AppConfig, RestaurantConfig
 from admin_service.stats import categorize_topics
 
 _IST = ZoneInfo("Asia/Kolkata")
@@ -66,6 +66,11 @@ tr:hover td { background: #fbfbfd; }
 .pagination button { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 5px 12px; font-size: 0.8rem; cursor: pointer; }
 .pagination button:hover:not(:disabled) { background: #eceef1; }
 .pagination button:disabled { opacity: 0.4; cursor: default; }
+.tile-link { text-decoration: none; color: inherit; display: block; }
+.tile-link:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.14); }
+.route-list { list-style: none; margin: 0 0 1.5rem; padding: 6px 20px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); font-size: 0.85rem; }
+.route-list li { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.route-list li:last-child { border-bottom: none; }
 """
 
 _CONFIDENCE_BADGES = {
@@ -210,8 +215,15 @@ def render_call_row(call: dict[str, Any]) -> str:
     topics_attr = escape("|".join(categories))
     ts_attr = escape(call["timestamp"] or "")
     duration_attr = _duration_seconds(call.get("duration_secs"))
+    escalation_key = "yes" if call["escalated"] else "no"
 
-    return f"""<tr data-date="{iso_date}" data-ts="{ts_attr}" data-duration="{duration_attr}" data-outcome="{outcome_key}" data-confidence="{confidence_key}" data-topics="{topics_attr}">
+    escalation_badge = (
+        '<span class="badge badge-red">⚠ Escalated</span>'
+        if call["escalated"]
+        else '<span class="badge badge-neutral">—</span>'
+    )
+
+    return f"""<tr data-date="{iso_date}" data-ts="{ts_attr}" data-duration="{duration_attr}" data-outcome="{outcome_key}" data-confidence="{confidence_key}" data-escalation="{escalation_key}" data-topics="{topics_attr}">
     <td class="nowrap">{duration_str}<br><span class="muted">{date_str} {time_str}</span></td>
     <td>{escape(call["caller_name"] or "—")}</td>
     <td class="nowrap">{escape(call["caller_phone"] or "—")}</td>
@@ -219,6 +231,7 @@ def render_call_row(call: dict[str, Any]) -> str:
     <td>{outcome_badge}</td>
     <td>{recording_html}</td>
     <td><span class="badge {conf_class}">{conf_label}</span></td>
+    <td>{escalation_badge}</td>
   </tr>"""
 
 
@@ -239,6 +252,11 @@ _FILTER_BAR = """
     <label><input type="checkbox" class="f-confidence" value="2" checked> Medium</label>
     <label><input type="checkbox" class="f-confidence" value="3" checked> Low</label>
     <label><input type="checkbox" class="f-confidence" value="0" checked> Unrated</label>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Escalation</span>
+    <label><input type="checkbox" class="f-escalation" value="yes" checked> Escalated</label>
+    <label><input type="checkbox" class="f-escalation" value="no" checked> Not escalated</label>
   </div>
   <div class="filter-group">
     <label>Sort by
@@ -309,6 +327,7 @@ _FILTER_SCRIPT = """
     var to = toEl.value;
     var outcomes = checkedValues('.f-outcome');
     var confidences = checkedValues('.f-confidence');
+    var escalations = checkedValues('.f-escalation');
     return rows.filter(function(row) {
       var date = row.getAttribute('data-date');
       if (date) {
@@ -317,6 +336,7 @@ _FILTER_SCRIPT = """
       }
       if (outcomes.indexOf(row.getAttribute('data-outcome')) === -1) return false;
       if (confidences.indexOf(row.getAttribute('data-confidence')) === -1) return false;
+      if (escalations.indexOf(row.getAttribute('data-escalation')) === -1) return false;
       if (selectedTopic) {
         var rowTopics = (row.getAttribute('data-topics') || '').split('|');
         if (rowTopics.indexOf(selectedTopic) === -1) return false;
@@ -404,7 +424,7 @@ _FILTER_SCRIPT = """
     if (table) table.scrollIntoView({behavior: 'smooth', block: 'start'});
   }
 
-  document.querySelectorAll('.f-outcome, .f-confidence').forEach(function(el) {
+  document.querySelectorAll('.f-outcome, .f-confidence, .f-escalation').forEach(function(el) {
     el.addEventListener('change', applyFilters);
   });
   fromEl.addEventListener('change', applyFilters);
@@ -417,7 +437,7 @@ _FILTER_SCRIPT = """
   document.getElementById('filter-clear').addEventListener('click', function() {
     fromEl.value = '';
     toEl.value = '';
-    document.querySelectorAll('.f-outcome, .f-confidence').forEach(function(el) { el.checked = true; });
+    document.querySelectorAll('.f-outcome, .f-confidence, .f-escalation').forEach(function(el) { el.checked = true; });
     sortEl.value = 'newest';
     setTopic(null);
   });
@@ -450,7 +470,7 @@ _FILTER_SCRIPT = """
 
 
 def render_call_table(calls: list[dict[str, Any]]) -> str:
-    columns = ["Call Time", "Caller", "Phone", "Topic", "Outcome", "Recording", "Confidence"]
+    columns = ["Call Time", "Caller", "Phone", "Topic", "Outcome", "Recording", "Confidence", "Escalation"]
     header = "".join(f"<th>{c}</th>" for c in columns)
     rows = "".join(render_call_row(c) for c in calls) or (
         f"<tr><td colspan='{len(columns)}'>No calls logged yet.</td></tr>"
@@ -503,3 +523,42 @@ def render_super_admin_page(entries: list[tuple[RestaurantConfig, dict[str, Any]
   <div class="tiles">{rows}</div>
 """
     return _page("Admin — All Restaurants", body)
+
+
+def render_home_page(config: AppConfig) -> str:
+    """Testing/staging control panel: every route this service exposes, in
+    one place, so testers don't need to know or guess URLs."""
+    restaurant_tiles = "".join(
+        f"""<a class="tile tile-link" href="{escape(cfg.admin_path)}">
+      <div class="value">{escape(cfg.display_name)}</div>
+      <div class="label">Dashboard &middot; {escape(cfg.admin_path)}</div>
+    </a>"""
+        for cfg in config.restaurants.values()
+    )
+    contact_export_items = "".join(
+        f'<li><a href="{escape(cfg.admin_path.rstrip("/"))}/contacts.csv">'
+        f'{escape(cfg.display_name)} — contacts.csv</a></li>'
+        for cfg in config.restaurants.values()
+    )
+    body = f"""
+  <h2>Restaurant Voice Agent — Control Panel</h2>
+  <p class="meta">Every route this service exposes, in one place. Each dashboard below has its own login.</p>
+
+  <h3>Dashboards</h3>
+  <div class="tiles">
+    <a class="tile tile-link" href="/admin">
+      <div class="value">All restaurants</div>
+      <div class="label">Super-admin &middot; /admin</div>
+    </a>
+    {restaurant_tiles}
+  </div>
+
+  <h3>Other routes</h3>
+  <ul class="route-list">
+    <li><a href="/healthz">/healthz</a> — service status + restaurant registry (JSON, no login)</li>
+    {contact_export_items}
+    <li><a href="/docs">/docs</a> — FastAPI interactive API docs (try requests directly)</li>
+    <li><a href="/redoc">/redoc</a> — FastAPI API reference</li>
+  </ul>
+"""
+    return _page("Control Panel — Restaurant Voice Agent", body)
