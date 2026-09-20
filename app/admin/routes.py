@@ -1,14 +1,8 @@
 """Registers /admin on Pipecat's shared runner FastAPI app.
 
-`pipecat.runner.run` exports its FastAPI `app` instance specifically so other
-modules can add routes before calling `main()` (see that module's own
-docstring) — this is that extension point, not a workaround.
-
-One row per CALL (joined across Sheet1/Bookings/Recordings by
-CallSessionId — see sheets_reader.fetch_calls), not one row per logged
-topic like the original version. Topic is a small set of derived category
-badges rather than raw free-text, since a call can touch several topics and
-the raw logInteraction topic strings aren't a controlled vocabulary.
+Uses `pipecat.runner.run`'s exported `app` extension point. One row per
+CALL (joined across Sheet1/Bookings/Recordings by CallSessionId), with
+topics collapsed into a small set of derived category badges.
 """
 
 from __future__ import annotations
@@ -19,12 +13,15 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
 
 from app.admin.auth import require_admin
 from app.admin.sheets_reader import fetch_calls
 from app.config.restaurants import ACTIVE_RESTAURANT
+from app.config.settings import settings
+from app.pipeline.logging_enforcer import LOG_INTERACTION_STATS
+from app.services import drive_oauth_client
 
 _IST = ZoneInfo("Asia/Kolkata")
 
@@ -177,6 +174,45 @@ def _call_row_html(call: dict[str, Any]) -> str:
 
 
 def register_admin_routes(app: FastAPI) -> None:
+    @app.get("/admin/health", dependencies=[Depends(require_admin)])
+    async def admin_health() -> JSONResponse:
+        """Live diagnostics for whatever's actually deployed — built because
+        this deployment's own env vars (API keys, OAuth tokens) have already
+        been confirmed to sometimes differ from local .env (see
+        TROUBLESHOOTING.md's reasoning_effort incident), so a passing local
+        test proves nothing about prod. Actually exercises the Drive upload
+        credential path (read-only: refresh + folder lookup, no file
+        written) rather than just checking a key is *present*.
+        """
+        drive_ok = True
+        drive_error: str | None = None
+        try:
+            service = drive_oauth_client._client()
+            drive_oauth_client._get_or_create_folder(service)
+        except Exception as e:  # noqa: BLE001 - the exception message IS the diagnostic
+            drive_ok = False
+            drive_error = f"{type(e).__name__}: {e}"
+            logger.exception("admin_health: Drive credential check failed")
+
+        total = LOG_INTERACTION_STATS["inline"] + LOG_INTERACTION_STATS["backfilled"]
+        inline_rate = (LOG_INTERACTION_STATS["inline"] / total) if total else None
+
+        return JSONResponse(
+            {
+                "restaurant": ACTIVE_RESTAURANT.name,
+                "restaurant_id": settings.restaurant_id,
+                "openai_model": settings.openai_model,
+                "drive_recording": {
+                    "ok": drive_ok,
+                    "error": drive_error,
+                },
+                "log_interaction_stats": {
+                    **LOG_INTERACTION_STATS,
+                    "inline_rate": inline_rate,
+                },
+            }
+        )
+
     @app.get("/admin", dependencies=[Depends(require_admin)])
     async def admin_page() -> HTMLResponse:
         try:

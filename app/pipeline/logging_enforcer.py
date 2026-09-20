@@ -1,45 +1,14 @@
-"""Backfills a missed logInteraction call in the background, and — only for
-the rare case a reply already sounds like a goodbye without end_call having
-been called — forces a synchronous foreground nudge to actually end the call.
+"""Backfills a missed logInteraction call in the background, and — only
+when a reply already sounds like a goodbye without end_call having been
+called — forces a synchronous foreground nudge to actually end the call.
 
-Previously both of these were the same mechanism: any unlogged reply forced
-a synchronous extra LLM completion (a "developer" nudge message + a fresh
-LLMRunFrame through the same OpenAILLMService instance) before the pipeline
-would continue. Confirmed live via /live testing: pipecat's LLM service
-processes LLMContextFrames strictly in arrival order, one at a time, so that
-forced completion sat in the *same queue* the caller's own next turn needed —
-if the caller finished speaking while the nudge's completion was still in
-flight, their real question waited behind pure bookkeeping. Nearly every
-reply hit this path (the prompt-only instruction to call logInteraction
-inline turned out to be unreliable), so nearly every turn paid for two full
-LLM round-trips back to back instead of one.
-
-logInteraction only feeds the /admin call log — nothing in the live call
-depends on it being written before the next turn starts. So instead of
-re-entering the shared pipeline, a missed logInteraction call is backfilled
-by a *separate*, independent OpenAI completion (its own AsyncOpenAI client,
-forced via tool_choice to call log_interaction, given the conversation so far
-plus the reply that needs logging) fired as a background task and never
-awaited — the caller's next turn is never queued behind it. The tool schema
-is generated from log_interaction's own docstring via pipecat's own adapter
-machinery, not hand-duplicated, so the two can't drift out of sync.
-
-Ending the call is different: a call that should end but doesn't is worse
-than a log row landing a couple seconds late, and this only fires when a
-reply already sounds like a goodbye (rare) — so that one case keeps the
-original synchronous nudge-and-swallow behavior. The `_awaiting_followup`/
-`_chain_extends` pair below is the same *response transaction* tracking as
-before, just scoped to this narrower case: one caller-facing reply plus
-however many silent tool-call-and-continuation rounds pipecat generates on
-its own to produce it. This tracking is best-effort, not authoritative --
-pipecat's automatic continuation frame looks identical whether it's genuinely
-still part of the current transaction or the model has moved on to unprompted
-new content, so a nudge-originated transaction deliberately stops swallowing
-after its own immediate followup (`_chain_extends = False`) so a real next
-question isn't lost as dead air -- which is also the gap that
-`turn_taking_guard.py`'s `OneUtterancePerTurnGuard` exists to backstop with a
-transaction-agnostic invariant: never more than one caller-facing utterance
-per caller turn, however many transactions produced it.
+Backfilling used to force a synchronous extra LLM completion inline,
+which queued behind the caller's own next turn and doubled round-trip
+latency on nearly every turn. Since logInteraction only feeds the /admin
+log, a missed call is now backfilled by a separate, un-awaited background
+OpenAI completion instead. Ending the call stays synchronous, since a
+call that should end but doesn't is worse than a late log row;
+`turn_taking_guard.py` backstops this with a transaction-agnostic invariant.
 """
 
 from __future__ import annotations
@@ -63,10 +32,8 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from app.config.settings import settings
 from app.tools.log_interaction import log_interaction, write_interaction_row
 
-# Generated once from log_interaction's own signature/docstring (the same
-# machinery `LLMContext(tools=[log_interaction, ...])` uses in main.py) so
-# the background backfill call always matches the real tool's fields and
-# field descriptions -- no hand-copied schema to fall out of sync.
+# Generated from log_interaction's own signature/docstring so the backfill
+# call always matches the real tool's fields — no hand-copied schema.
 _LOG_INTERACTION_TOOLS = OpenAILLMAdapter().to_provider_tools_format(
     ToolsSchema(standard_tools=[log_interaction])
 )
@@ -86,10 +53,8 @@ _ENDING_SIGNAL_PHRASES = (
     "have a great day",
     "talk soon",
     "hang up",
-    # Bare "112" catches every phrasing ("dial 112", "by dialing 112", "112
-    # immediately"); an exact-phrase match missed "dialing 112" live and
-    # left an emergency reply un-nudged for the full 60s timeout. Only
-    # appears in this app's emergency instruction, so it's an unambiguous signal.
+    # Bare "112" catches every phrasing ("dial 112", "by dialing 112"); an
+    # exact-phrase match missed some live and left emergencies un-nudged.
     "112",
 )
 
@@ -108,16 +73,20 @@ _END_CALL_FOLLOWUP_PROMPT = (
 
 
 class WorkerHandle:
-    """Holds the PipelineWorker once it exists.
-
-    The processor has to be built before `Pipeline(...)`, which is itself
-    built before `PipelineWorker(...)` — so it can't take the worker directly
-    in its constructor. Set `worker` on this once, right after the worker is
-    actually created.
-    """
+    """Holds the PipelineWorker once it exists — the processor is built
+    before the worker, so it can't take it directly in its constructor."""
 
     def __init__(self) -> None:
         self.worker = None
+
+
+# Process-lifetime counters, not per-call -- answers "is the backfill path
+# actually rare or is it firing on nearly every turn" without grepping logs.
+# Reset on every deploy/restart; that's fine, this is a live health signal
+# (see GET / in app/main.py), not a stored metric. Each turn's outcome
+# increments exactly one of these -- see the two conclusion points in
+# process_frame below.
+LOG_INTERACTION_STATS = {"inline": 0, "backfilled": 0}
 
 
 class LogInteractionEnforcer(FrameProcessor):
@@ -137,6 +106,15 @@ class LogInteractionEnforcer(FrameProcessor):
         self._caller_phone = caller_phone
         self._openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
         self._tool_call_seen = False
+        # Persists across the silent tool-call-only rounds of a multi-round
+        # transaction (check_availability -> log_interaction -> final spoken
+        # reply each land as separate LLMFullResponseEndFrames) -- only
+        # _tool_call_seen is per-round. Without this, a transaction that
+        # calls log_interaction in an earlier round still looked "unlogged"
+        # by the time the final, text-only round arrived, firing a
+        # redundant backfill call every single time. Reset only at an
+        # actual transaction boundary, not every round -- see process_frame.
+        self._log_interaction_seen = False
         self._reply_text_parts: list[str] = []
         self._awaiting_followup = False
         self._chain_extends = False
@@ -150,6 +128,8 @@ class LogInteractionEnforcer(FrameProcessor):
                 return
         elif isinstance(frame, FunctionCallsStartedFrame):
             self._tool_call_seen = True
+            if any(fc.function_name == "log_interaction" for fc in frame.function_calls):
+                self._log_interaction_seen = True
         elif isinstance(frame, LLMFullResponseEndFrame):
             reply_text = "".join(self._reply_text_parts)
             self._reply_text_parts = []
@@ -162,17 +142,23 @@ class LogInteractionEnforcer(FrameProcessor):
                 )
                 if not self._tool_call_seen or not self._chain_extends:
                     self._awaiting_followup = False
-            elif not self._tool_call_seen and reply_text.strip():
+                    if self._log_interaction_seen:
+                        LOG_INTERACTION_STATS["inline"] += 1
+                    self._log_interaction_seen = False
+            elif not self._tool_call_seen and reply_text.strip() and not self._log_interaction_seen:
                 ending = _sounds_like_ending(reply_text)
                 logger.info(
-                    "LogInteractionEnforcer: no tool call this turn — backfilling "
-                    "logInteraction in the background (reply={!r}, sounds_like_ending={})",
+                    "LogInteractionEnforcer: no log_interaction call this "
+                    "transaction — backfilling in the background (reply={!r}, "
+                    "sounds_like_ending={})",
                     reply_text,
                     ending,
                 )
                 # Never awaited: the caller's next turn must not queue behind
                 # this. See module docstring.
                 self.create_task(self._backfill_log_interaction(reply_text))
+                self._log_interaction_seen = False
+                LOG_INTERACTION_STATS["backfilled"] += 1
 
                 if ending:
                     logger.info(
@@ -186,7 +172,23 @@ class LogInteractionEnforcer(FrameProcessor):
                         self._awaiting_followup = True
                         self._chain_extends = False
                         await self._worker_handle.worker.queue_frames([LLMRunFrame()])
+            elif not self._tool_call_seen and reply_text.strip():
+                # log_interaction was already called in an earlier round of
+                # this same transaction -- final round, nothing to backfill,
+                # and no tool call here so no continuation to swallow either.
+                logger.info(
+                    "LogInteractionEnforcer: already logged earlier this "
+                    "transaction — no backfill needed (reply={!r})",
+                    reply_text,
+                )
+                self._log_interaction_seen = False
+                LOG_INTERACTION_STATS["inline"] += 1
             elif reply_text.strip():
+                # Tool call(s) this round alongside text -- pipecat will
+                # auto-continue after the tool call, so swallow that
+                # continuation (same as always; unrelated to log_interaction
+                # specifically). Don't reset _log_interaction_seen: it
+                # carries forward into the swallowed continuation round(s).
                 logger.info(
                     "LogInteractionEnforcer: round replied and called a tool — "
                     "swallowing the automatic post-tool-call continuation"
@@ -198,10 +200,9 @@ class LogInteractionEnforcer(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def _backfill_log_interaction(self, reply_text: str) -> None:
-        """Classify and log a reply the model itself didn't log, via a
-        standalone OpenAI call that never touches the shared conversational
-        pipeline. Best-effort: any failure here only costs a missing /admin
-        row, never the live call, so it's logged and dropped, not retried."""
+        """Classify and log a reply the model didn't log, via a standalone
+        OpenAI call. Best-effort: a failure costs a missing /admin row,
+        never the live call, so it's logged and dropped, not retried."""
         messages = [
             {"role": "system", "content": _BACKFILL_SYSTEM_PROMPT},
             *[dict(m) for m in self._context.messages],
@@ -214,9 +215,7 @@ class LogInteractionEnforcer(FrameProcessor):
                 tools=_LOG_INTERACTION_TOOLS,
                 tool_choice={"type": "function", "function": {"name": "log_interaction"}},
                 # gpt-5.6-luna 400s on function tools without this (see
-                # app/main.py's _build_llm and TROUBLESHOOTING.md) --
-                # confirmed live 2026-09-19 when this call site broke on
-                # every single turn because only _build_llm had the fix.
+                # app/main.py's _build_llm and TROUBLESHOOTING.md).
                 reasoning_effort="none",
             )
             tool_call = response.choices[0].message.tool_calls[0]
