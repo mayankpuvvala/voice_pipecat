@@ -46,6 +46,7 @@ tr:hover td { background: #fbfbfd; }
 .badge-clickable:hover { filter: brightness(0.95); }
 .badge-clickable.badge-active { outline: 2px solid #3730a3; }
 .topic-filter-chip { display: inline-flex; align-items: center; gap: 6px; background: #eef2ff; color: #3730a3; border-radius: 999px; padding: 2px 10px; font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+.topic-filter-chip[hidden] { display: none; }
 .cap-bar-track { background: #e5e7eb; border-radius: 999px; height: 10px; width: 100%; max-width: 320px; overflow: hidden; }
 .cap-bar-fill { height: 100%; border-radius: 999px; }
 .hour-chart { display: flex; align-items: flex-end; gap: 3px; height: 160px; padding-top: 18px; overflow-x: auto; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
