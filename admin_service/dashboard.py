@@ -40,19 +40,32 @@ tr:hover td { background: #fbfbfd; }
 .tile { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 14px 18px; min-width: 140px; }
 .tile .value { font-size: 1.5rem; font-weight: 700; }
 .tile .label { color: var(--text-muted); font-size: 0.78rem; }
+.tile-clickable { cursor: pointer; }
+.tile-clickable:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.14); }
+.badge-clickable { cursor: pointer; }
+.badge-clickable:hover { filter: brightness(0.95); }
+.badge-clickable.badge-active { outline: 2px solid #3730a3; }
+.topic-filter-chip { display: inline-flex; align-items: center; gap: 6px; background: #eef2ff; color: #3730a3; border-radius: 999px; padding: 2px 10px; font-size: 0.78rem; font-weight: 600; cursor: pointer; }
 .cap-bar-track { background: #e5e7eb; border-radius: 999px; height: 10px; width: 100%; max-width: 320px; overflow: hidden; }
 .cap-bar-fill { height: 100%; border-radius: 999px; }
-.hour-row { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; margin: 2px 0; }
-.hour-label { width: 42px; color: var(--text-muted); }
-.hour-bar { background: #6366f1; height: 10px; border-radius: 4px; }
+.hour-chart { display: flex; align-items: flex-end; gap: 3px; height: 160px; padding-top: 18px; overflow-x: auto; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.hour-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; flex: 1 0 20px; height: 100%; }
+.hour-col-count { font-size: 0.65rem; color: var(--text-muted); height: 14px; }
+.hour-col-bar { width: 100%; min-height: 1px; background: #6366f1; border-radius: 3px 3px 0 0; }
+.hour-col-label { font-size: 0.65rem; color: var(--text-muted); margin-top: 4px; }
 .restaurant-links a { display: inline-block; margin-right: 14px; font-weight: 600; }
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 12px 16px; margin-bottom: 1.25rem; font-size: 0.85rem; }
 .filter-group { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .filter-group label { display: flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }
 .filter-label { font-weight: 600; color: #374151; margin-right: 2px; }
 .filters input[type="date"] { border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 0.85rem; }
+.filters select { border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 0.85rem; }
 .filters button { border: 1px solid var(--border); background: #f5f6f8; border-radius: 6px; padding: 5px 10px; font-size: 0.8rem; cursor: pointer; }
 .filters button:hover { background: #eceef1; }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 12px 0 2px; }
+.pagination button { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 5px 12px; font-size: 0.8rem; cursor: pointer; }
+.pagination button:hover:not(:disabled) { background: #eceef1; }
+.pagination button:disabled { opacity: 0.4; cursor: default; }
 """
 
 _CONFIDENCE_BADGES = {
@@ -94,6 +107,17 @@ def _format_duration(duration_secs: Any) -> str:
     return f"{minutes}min {seconds}secs"
 
 
+def _duration_seconds(duration_secs: Any) -> float:
+    """Numeric seconds for sorting, or -1 for unknown/unparseable (sorts last
+    when sorting longest-first)."""
+    if duration_secs in (None, ""):
+        return -1.0
+    try:
+        return float(duration_secs)
+    except (TypeError, ValueError):
+        return -1.0
+
+
 def _cap_color(pct: float) -> str:
     if pct >= 100:
         return "#991b1b"
@@ -102,49 +126,65 @@ def _cap_color(pct: float) -> str:
     return "#16a34a"
 
 
-def render_cap_bar(minutes_used: float, minutes_allowed: int, pct: float) -> str:
+def render_cap_bar(minutes_used: float, minutes_allowed: int, minutes_remaining: float, pct: float) -> str:
     fill_pct = min(pct, 100)
     color = _cap_color(pct)
     return f"""<div>
   <div class="cap-bar-track"><div class="cap-bar-fill" style="width:{fill_pct:.0f}%;background:{color}"></div></div>
-  <span class="muted">{minutes_used:.0f} / {minutes_allowed} min used this month ({pct:.0f}%)</span>
+  <span class="muted">{minutes_used:.0f} / {minutes_allowed} min used this month ({pct:.0f}%) &middot; {minutes_remaining:.0f} min remaining</span>
 </div>"""
 
 
 def render_stat_tiles(stats: dict[str, Any]) -> str:
-    tiles = [
+    before = [
+        ("Calls this week", stats["total_calls_this_week"]),
         ("Calls this month", stats["total_calls_this_month"]),
         ("Calls all-time", stats["total_calls_all_time"]),
+    ]
+    after = [
         ("Avg call length", f"{stats['avg_call_minutes']:.1f} min"),
         ("Shortest / longest", f"{stats['min_call_minutes']:.1f} / {stats['max_call_minutes']:.1f} min"),
     ]
-    tiles_html = "".join(
+    before_html = "".join(
         f'<div class="tile"><div class="value">{v}</div><div class="label">{escape(k)}</div></div>'
-        for k, v in tiles
+        for k, v in before
     )
-    return f'<div class="tiles">{tiles_html}</div>'
+    after_html = "".join(
+        f'<div class="tile"><div class="value">{v}</div><div class="label">{escape(k)}</div></div>'
+        for k, v in after
+    )
+    followups_tile = f"""<div class="tile tile-clickable" id="tile-followups"
+    data-from="{stats['this_month_start_iso']}" data-to="{stats['today_iso']}"
+    title="Click to filter the call log below to this month's follow-ups">
+    <div class="value">{stats['followups_needed_this_month']}</div>
+    <div class="label">Follow-ups needed (this month)</div></div>"""
+    return f'<div class="tiles">{before_html}{followups_tile}{after_html}</div>'
 
 
 def render_topic_breakdown(topic_counts: dict[str, int]) -> str:
     if not topic_counts:
         return '<p class="muted">No categorized topics yet.</p>'
     badges = "".join(
-        f'<span class="badge badge-topic">{escape(name)} · {count}</span>'
+        f'<span class="badge badge-topic badge-clickable" data-topic="{escape(name)}" '
+        f'title="Click to filter the call log below to this topic">{escape(name)} · {count}</span>'
         for name, count in topic_counts.items()
     )
-    return f"<p>{badges}</p>"
+    return f'<p id="topic-badges">{badges}</p>'
 
 
 def render_hour_chart(hour_counts: list[int]) -> str:
+    if not any(hour_counts):
+        return '<p class="muted">No call-time data yet.</p>'
     peak = max(hour_counts) or 1
-    rows = "".join(
-        f'<div class="hour-row"><span class="hour-label">{h:02d}:00</span>'
-        f'<div class="hour-bar" style="width:{(count / peak) * 200:.0f}px"></div>'
-        f'<span class="muted">{count}</span></div>'
+    cols = "".join(
+        f'<div class="hour-col" title="{h:02d}:00 &middot; {count} call(s)">'
+        f'<span class="hour-col-count">{count or ""}</span>'
+        f'<div class="hour-col-bar" style="height:{(count / peak) * 100:.0f}%"></div>'
+        f'<span class="hour-col-label">{h}</span>'
+        f'</div>'
         for h, count in enumerate(hour_counts)
-        if count > 0
     )
-    return rows or '<p class="muted">No call-time data yet.</p>'
+    return f'<div class="hour-chart">{cols}</div>'
 
 
 def render_call_row(call: dict[str, Any]) -> str:
@@ -167,8 +207,11 @@ def render_call_row(call: dict[str, Any]) -> str:
         recording_html = "—"
 
     conf_label, conf_class = _CONFIDENCE_BADGES.get(call["confidence_rank"], _CONFIDENCE_BADGES[0])
+    topics_attr = escape("|".join(categories))
+    ts_attr = escape(call["timestamp"] or "")
+    duration_attr = _duration_seconds(call.get("duration_secs"))
 
-    return f"""<tr data-date="{iso_date}" data-outcome="{outcome_key}" data-confidence="{confidence_key}">
+    return f"""<tr data-date="{iso_date}" data-ts="{ts_attr}" data-duration="{duration_attr}" data-outcome="{outcome_key}" data-confidence="{confidence_key}" data-topics="{topics_attr}">
     <td class="nowrap">{duration_str}<br><span class="muted">{date_str} {time_str}</span></td>
     <td>{escape(call["caller_name"] or "—")}</td>
     <td class="nowrap">{escape(call["caller_phone"] or "—")}</td>
@@ -197,8 +240,36 @@ _FILTER_BAR = """
     <label><input type="checkbox" class="f-confidence" value="3" checked> Low</label>
     <label><input type="checkbox" class="f-confidence" value="0" checked> Unrated</label>
   </div>
+  <div class="filter-group">
+    <label>Sort by
+      <select id="sort-by">
+        <option value="newest" selected>Newest first</option>
+        <option value="oldest">Oldest first</option>
+        <option value="lengthiest">Longest call first</option>
+      </select>
+    </label>
+  </div>
+  <div class="filter-group">
+    <label>Show
+      <select id="page-size">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="0">All</option>
+      </select>
+    </label>
+  </div>
   <button type="button" id="filter-clear">Clear filters</button>
   <span class="muted" id="filter-count"></span>
+  <span class="topic-filter-chip" id="topic-filter-chip" hidden></span>
+</div>
+"""
+
+_PAGINATION_BAR = """
+<div class="pagination">
+  <button type="button" id="page-prev">&larr; Prev</button>
+  <span class="muted" id="page-indicator"></span>
+  <button type="button" id="page-next">Next &rarr;</button>
 </div>
 """
 
@@ -208,34 +279,129 @@ _FILTER_SCRIPT = """
   var fromEl = document.getElementById('filter-from');
   var toEl = document.getElementById('filter-to');
   var countEl = document.getElementById('filter-count');
+  var chipEl = document.getElementById('topic-filter-chip');
+  var sortEl = document.getElementById('sort-by');
+  var pageSizeEl = document.getElementById('page-size');
+  var prevBtn = document.getElementById('page-prev');
+  var nextBtn = document.getElementById('page-next');
+  var pageIndicatorEl = document.getElementById('page-indicator');
+  var tbody = document.querySelector('#call-table tbody');
   var rows = Array.prototype.slice.call(
     document.querySelectorAll('#call-table tbody tr[data-date]')
   );
+  var selectedTopic = null;
+  var matchedRows = [];
+  var currentPage = 1;
 
   function checkedValues(selector) {
     return Array.prototype.slice.call(document.querySelectorAll(selector + ':checked'))
       .map(function(el) { return el.value; });
   }
 
-  function applyFilters() {
+  function setChecked(selector, values) {
+    document.querySelectorAll(selector).forEach(function(el) {
+      el.checked = values.indexOf(el.value) !== -1;
+    });
+  }
+
+  function computeMatches() {
     var from = fromEl.value;
     var to = toEl.value;
     var outcomes = checkedValues('.f-outcome');
     var confidences = checkedValues('.f-confidence');
-    var shown = 0;
-    rows.forEach(function(row) {
+    return rows.filter(function(row) {
       var date = row.getAttribute('data-date');
-      var ok = true;
       if (date) {
-        if (from && date < from) ok = false;
-        if (to && date > to) ok = false;
+        if (from && date < from) return false;
+        if (to && date > to) return false;
       }
-      if (outcomes.indexOf(row.getAttribute('data-outcome')) === -1) ok = false;
-      if (confidences.indexOf(row.getAttribute('data-confidence')) === -1) ok = false;
-      row.style.display = ok ? '' : 'none';
-      if (ok) shown++;
+      if (outcomes.indexOf(row.getAttribute('data-outcome')) === -1) return false;
+      if (confidences.indexOf(row.getAttribute('data-confidence')) === -1) return false;
+      if (selectedTopic) {
+        var rowTopics = (row.getAttribute('data-topics') || '').split('|');
+        if (rowTopics.indexOf(selectedTopic) === -1) return false;
+      }
+      return true;
     });
-    countEl.textContent = shown + ' of ' + rows.length + ' shown';
+  }
+
+  function byTimestamp(sortBy) {
+    // Rows with an unknown timestamp always sink to the bottom, in either
+    // direction, rather than winning "oldest first" by empty-string quirk.
+    return function(a, b) {
+      var ta = a.getAttribute('data-ts') || '';
+      var tb = b.getAttribute('data-ts') || '';
+      if (!ta && !tb) return 0;
+      if (!ta) return 1;
+      if (!tb) return -1;
+      return sortBy === 'oldest' ? ta.localeCompare(tb) : tb.localeCompare(ta);
+    };
+  }
+
+  function sortMatches(list) {
+    var sortBy = sortEl.value;
+    var sorted = list.slice();
+    if (sortBy === 'lengthiest') {
+      sorted.sort(function(a, b) {
+        return parseFloat(b.getAttribute('data-duration')) - parseFloat(a.getAttribute('data-duration'));
+      });
+    } else {
+      sorted.sort(byTimestamp(sortBy));
+    }
+    return sorted;
+  }
+
+  function reorderDom(list) {
+    list.forEach(function(row) { tbody.appendChild(row); });
+  }
+
+  function renderPage() {
+    var total = matchedRows.length;
+    var pageSize = parseInt(pageSizeEl.value, 10) || 0;
+    var totalPages = pageSize ? Math.max(Math.ceil(total / pageSize), 1) : 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+    var start = pageSize ? (currentPage - 1) * pageSize : 0;
+    var end = pageSize ? start + pageSize : total;
+    var visible = matchedRows.slice(start, end);
+    var visibleSet = new Set(visible);
+
+    rows.forEach(function(row) {
+      row.style.display = visibleSet.has(row) ? '' : 'none';
+    });
+
+    countEl.textContent = total === 0
+      ? '0 of ' + rows.length + ' shown'
+      : 'Showing ' + (start + 1) + '\\u2013' + Math.min(end, total) + ' of ' + total + ' matched (' + rows.length + ' total)';
+    pageIndicatorEl.textContent = 'Page ' + currentPage + ' of ' + totalPages;
+    prevBtn.disabled = currentPage <= 1;
+    nextBtn.disabled = currentPage >= totalPages;
+  }
+
+  function applyFilters() {
+    matchedRows = sortMatches(computeMatches());
+    reorderDom(matchedRows);
+    currentPage = 1;
+    renderPage();
+  }
+
+  function setTopic(topic) {
+    selectedTopic = topic;
+    document.querySelectorAll('.badge-clickable').forEach(function(el) {
+      el.classList.toggle('badge-active', el.getAttribute('data-topic') === topic);
+    });
+    if (topic) {
+      chipEl.textContent = 'Topic: ' + topic + '  \\u2715';
+      chipEl.hidden = false;
+    } else {
+      chipEl.hidden = true;
+    }
+    applyFilters();
+  }
+
+  function scrollToTable() {
+    var table = document.getElementById('call-table');
+    if (table) table.scrollIntoView({behavior: 'smooth', block: 'start'});
   }
 
   document.querySelectorAll('.f-outcome, .f-confidence').forEach(function(el) {
@@ -243,12 +409,39 @@ _FILTER_SCRIPT = """
   });
   fromEl.addEventListener('change', applyFilters);
   toEl.addEventListener('change', applyFilters);
+  sortEl.addEventListener('change', applyFilters);
+  pageSizeEl.addEventListener('change', function() { currentPage = 1; renderPage(); });
+  prevBtn.addEventListener('click', function() { currentPage -= 1; renderPage(); });
+  nextBtn.addEventListener('click', function() { currentPage += 1; renderPage(); });
+
   document.getElementById('filter-clear').addEventListener('click', function() {
     fromEl.value = '';
     toEl.value = '';
     document.querySelectorAll('.f-outcome, .f-confidence').forEach(function(el) { el.checked = true; });
-    applyFilters();
+    sortEl.value = 'newest';
+    setTopic(null);
   });
+  chipEl.addEventListener('click', function() { setTopic(null); });
+
+  document.querySelectorAll('.badge-clickable').forEach(function(el) {
+    el.addEventListener('click', function() {
+      var topic = el.getAttribute('data-topic');
+      setTopic(selectedTopic === topic ? null : topic);
+      scrollToTable();
+    });
+  });
+
+  var followupsTile = document.getElementById('tile-followups');
+  if (followupsTile) {
+    followupsTile.addEventListener('click', function() {
+      fromEl.value = followupsTile.getAttribute('data-from');
+      toEl.value = followupsTile.getAttribute('data-to');
+      setChecked('.f-outcome', ['followup']);
+      setChecked('.f-confidence', ['0', '1', '2', '3']);
+      applyFilters();
+      scrollToTable();
+    });
+  }
 
   if (rows.length) applyFilters();
 })();
@@ -264,7 +457,7 @@ def render_call_table(calls: list[dict[str, Any]]) -> str:
     )
     return f"""{_FILTER_BAR}<div class="table-wrap"><table id="call-table">
     <thead><tr>{header}</tr></thead><tbody>{rows}</tbody>
-  </table></div>{_FILTER_SCRIPT}"""
+  </table></div>{_PAGINATION_BAR}{_FILTER_SCRIPT}"""
 
 
 def render_restaurant_page(
@@ -272,8 +465,10 @@ def render_restaurant_page(
 ) -> str:
     body = f"""
   <h2>{escape(cfg.display_name)}</h2>
-  <p class="meta">{len(calls)} call(s) logged, newest first.</p>
-  {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_used_pct"])}
+  <p class="meta">{len(calls)} call(s) logged. Data may be up to 20s stale (short cache to avoid re-reading the Sheet on every request). &middot;
+    <a href="{escape(cfg.admin_path)}">Refresh</a> &middot;
+    <a href="{escape(cfg.admin_path.rstrip('/'))}/contacts.csv">Export contacts (CSV)</a></p>
+  {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"])}
   {render_stat_tiles(stats)}
   <h3>What callers ask about</h3>
   {render_topic_breakdown(stats["topic_counts"])}
@@ -295,8 +490,8 @@ def render_super_admin_page(entries: list[tuple[RestaurantConfig, dict[str, Any]
     rows = "".join(
         f"""<div class="tile">
       <div class="value">{escape(cfg.display_name)}</div>
-      <div class="label">{stats["total_calls_this_month"]} calls this month</div>
-      {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_used_pct"])}
+      <div class="label">{stats["total_calls_this_month"]} calls this month &middot; {stats["followups_needed_this_month"]} follow-up(s) needed</div>
+      {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"])}
     </div>"""
         for cfg, stats in entries
     )

@@ -1,11 +1,6 @@
 """Loads config.yaml: the restaurant registry for this standalone admin
-service (see admin_service/__init__.py for why it's a separate service).
-
-Hard separation is enforced structurally, not by caller discipline: nothing
-here takes an arbitrary restaurant-id string and looks up "the matching
-config" — main.py resolves each RestaurantConfig once at startup and wires
-it directly to its own route, and resolve_credentials() only ever reads the
-one config object it's given, never a shared dict of everyone's secrets.
+service. Hard separation is structural — main.py wires each
+RestaurantConfig directly to its own route, never a shared secrets dict.
 """
 
 from __future__ import annotations

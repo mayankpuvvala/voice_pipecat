@@ -8,11 +8,12 @@ from __future__ import annotations
 import sys
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from loguru import logger
 
 from admin_service.auth import scoped_basic_auth
 from admin_service.config import RestaurantConfig, load_config, resolve_credentials
+from admin_service.contacts import contacts_csv
 from admin_service.dashboard import render_restaurant_page, render_super_admin_page
 from admin_service.sheets_reader import fetch_calls
 from admin_service.stats import compute_stats
@@ -33,15 +34,23 @@ def _load_restaurant_page(cfg: RestaurantConfig) -> str:
 
 
 def _register_restaurant_route(cfg: RestaurantConfig) -> None:
-    """One route per restaurant, each with its own auth dependency bound to
-    that restaurant's own credentials (see auth.py). `cfg` is this
-    function's own parameter, not the loop variable, so each route's
-    closure correctly captures its own restaurant — no late-binding here."""
+    """One route per restaurant, each with its own auth dependency. `cfg`
+    is this function's parameter, not the loop variable, avoiding late-binding."""
     auth_dep = Depends(scoped_basic_auth(resolve_credentials(cfg)))
 
     @app.get(cfg.admin_path, dependencies=[auth_dep], name=f"dashboard_{cfg.id}")
     async def _dashboard() -> HTMLResponse:
         return HTMLResponse(_load_restaurant_page(cfg))
+
+    @app.get(f"{cfg.admin_path.rstrip('/')}/contacts.csv", dependencies=[auth_dep], name=f"contacts_{cfg.id}")
+    async def _contacts_csv() -> PlainTextResponse:
+        calls = fetch_calls(cfg.google_sheet_id)
+        filename = f"{cfg.id}-contacts.csv"
+        return PlainTextResponse(
+            contacts_csv(calls),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
 
 for _cfg in config.restaurants.values():

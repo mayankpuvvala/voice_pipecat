@@ -1,8 +1,6 @@
 """Reads + joins one restaurant's Sheet1/Bookings/Recordings tabs into one
-row per call. Self-contained rather than importing app.admin.sheets_reader
-(that version is single-sheet/global-settings only, and importing it would
-pull app/ into this container) — same join shape, parameterized by
-sheet_id, cached per sheet_id for _CACHE_TTL_SECONDS.
+row per call. Self-contained rather than importing app.admin.sheets_reader,
+which would pull app/ into this container. Cached per sheet_id.
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ Month resets on the calendar month, IST (matches app/admin/routes.py).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -15,12 +15,12 @@ IST = ZoneInfo("Asia/Kolkata")
 _TOPIC_CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
     ("Reservation", ("reserv", "book", "table")),
     ("Cancellation", ("cancel",)),
-    (
-        "Menu & Info",
-        ("menu", "hour", "location", "parking", "deliver", "takeout", "payment", "dietary", "cuisine", "address"),
-    ),
-    ("Pricing/Allergen", ("price", "allerg", "ingredient")),
-    ("Escalation", ("complain", "emergency", "manager", "owner")),
+    ("Menu & Cuisine", ("menu", "cuisine", "dish")),
+    ("Hours & Location", ("hour", "location", "parking", "address")),
+    ("Delivery & Takeout", ("deliver", "takeout")),
+    ("Dietary & Allergen", ("dietary", "allerg", "ingredient", "vegan", "vegetarian", "gluten")),
+    ("Pricing & Payment", ("price", "payment", "cost")),
+    ("Escalation/Complaint", ("complain", "emergency", "manager", "owner")),
 ]
 
 
@@ -59,13 +59,21 @@ def _call_minutes(call: dict[str, Any]) -> float | None:
         return None
 
 
+def _week_start(now_ist: datetime) -> datetime:
+    """Monday 00:00 IST of the current calendar week."""
+    start_of_day = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start_of_day - timedelta(days=start_of_day.weekday())
+
+
 def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -> dict[str, Any]:
     """Everything the dashboard needs to render, for one restaurant's calls."""
     now_ist = datetime.now(IST)
+    week_start = _week_start(now_ist)
 
     this_month_calls = [
         c for c in calls if (dt := _call_local_dt(c)) and dt.year == now_ist.year and dt.month == now_ist.month
     ]
+    this_week_calls = [c for c in calls if (dt := _call_local_dt(c)) and dt >= week_start]
 
     all_minutes = [m for c in calls if (m := _call_minutes(c)) is not None]
     month_minutes = [m for c in this_month_calls if (m := _call_minutes(c)) is not None]
@@ -82,11 +90,20 @@ def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -
             hour_counts[dt.hour] += 1
 
     minutes_used_this_month = sum(month_minutes)
+    minutes_remaining_this_month = (
+        max(minutes_allowed_per_month - minutes_used_this_month, 0.0) if minutes_allowed_per_month else 0.0
+    )
+    followups_needed_this_month = sum(1 for c in this_month_calls if c.get("needs_followup"))
 
     return {
         "total_calls_all_time": len(calls),
         "total_calls_this_month": len(this_month_calls),
+        "total_calls_this_week": len(this_week_calls),
+        "followups_needed_this_month": followups_needed_this_month,
+        "this_month_start_iso": now_ist.replace(day=1).strftime("%Y-%m-%d"),
+        "today_iso": now_ist.strftime("%Y-%m-%d"),
         "minutes_used_this_month": minutes_used_this_month,
+        "minutes_remaining_this_month": minutes_remaining_this_month,
         "minutes_allowed_per_month": minutes_allowed_per_month,
         "minutes_used_pct": (
             (minutes_used_this_month / minutes_allowed_per_month * 100)
