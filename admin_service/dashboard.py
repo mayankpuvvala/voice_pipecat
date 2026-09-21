@@ -77,7 +77,10 @@ tr:hover td { background: #fbfbfd; }
 .trend-down { color: #dc2626; }
 .trend-flat { color: var(--text-muted); }
 .trend-note { font-weight: 400; color: var(--text-muted); }
-.donut-wrap { display: flex; align-items: center; gap: 24px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 16px 20px; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.top-row { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; margin-bottom: 1.5rem; }
+.top-row-cell { flex: 1 1 320px; min-width: 280px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 16px 20px; }
+.donut-heading { font-weight: 600; color: #374151; font-size: 0.85rem; margin-bottom: 10px; }
+.donut-wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 .donut { width: 120px; height: 120px; border-radius: 50%; position: relative; flex-shrink: 0; }
 .donut::after { content: ""; position: absolute; inset: 22px; background: #fff; border-radius: 50%; }
 .donut-center { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; }
@@ -597,10 +600,16 @@ def render_restaurant_page(
   <p class="meta">{len(calls)} call(s) logged. Data may be up to 20s stale (short cache to avoid re-reading the Sheet on every request). &middot;
     <a href="{escape(cfg.admin_path)}">Refresh</a> &middot;
     <a href="{escape(cfg.admin_path.rstrip('/'))}/contacts.csv">Export contacts (CSV)</a></p>
-  {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"], stats["minutes_pct_change"])}
+  <div class="top-row">
+    <div class="top-row-cell">
+      {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"], stats["minutes_pct_change"])}
+    </div>
+    <div class="top-row-cell">
+      <div class="donut-heading">Call outcome (this month)</div>
+      {render_outcome_donut(stats["resolved_this_month"], stats["followups_needed_this_month"])}
+    </div>
+  </div>
   {render_stat_tiles(stats)}
-  <h3>Call outcome (this month)</h3>
-  {render_outcome_donut(stats["resolved_this_month"], stats["followups_needed_this_month"])}
   <h3>What callers ask about</h3>
   {render_topic_breakdown(stats["topic_counts"])}
   <h3>Calls by hour of day (IST)</h3>
