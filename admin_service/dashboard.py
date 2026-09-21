@@ -49,7 +49,7 @@ tr:hover td { background: #fbfbfd; }
 .topic-filter-chip[hidden] { display: none; }
 .cap-bar-track { background: #e5e7eb; border-radius: 999px; height: 10px; width: 100%; max-width: 320px; overflow: hidden; }
 .cap-bar-fill { height: 100%; border-radius: 999px; }
-.hour-chart { display: flex; align-items: flex-end; gap: 3px; height: 160px; padding-top: 18px; overflow-x: auto; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.hour-chart { display: flex; align-items: flex-end; gap: 3px; height: 160px; max-width: 640px; padding-top: 18px; overflow-x: auto; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 .hour-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; flex: 1 0 20px; height: 100%; }
 .hour-col-count { font-size: 0.65rem; color: var(--text-muted); height: 14px; }
 .hour-col-bar { width: 100%; min-height: 1px; background: #6366f1; border-radius: 3px 3px 0 0; }
