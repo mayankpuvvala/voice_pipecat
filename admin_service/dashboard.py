@@ -77,10 +77,13 @@ tr:hover td { background: #fbfbfd; }
 .trend-down { color: #dc2626; }
 .trend-flat { color: var(--text-muted); }
 .trend-note { font-weight: 400; color: var(--text-muted); }
-.top-row { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; margin-bottom: 1.5rem; }
-.top-row-cell { flex: 1 1 320px; min-width: 280px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 16px 20px; }
+.summary-row { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; }
+.summary-main { flex: 3 1 480px; min-width: 0; }
+.summary-main .tiles { margin-bottom: 0; }
+.summary-side { flex: 1 1 260px; max-width: 320px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 16px 20px; margin-bottom: 1.5rem; display: flex; flex-direction: column; justify-content: center; }
 .donut-heading { font-weight: 600; color: #374151; font-size: 0.85rem; margin-bottom: 10px; }
 .donut-wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+.tile-minutes { min-width: 240px; }
 .donut { width: 120px; height: 120px; border-radius: 50%; position: relative; flex-shrink: 0; }
 .donut::after { content: ""; position: absolute; inset: 22px; background: #fff; border-radius: 50%; }
 .donut-center { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; }
@@ -184,6 +187,15 @@ def render_cap_bar(
 
 
 def render_stat_tiles(stats: dict[str, Any]) -> str:
+    minutes_pct = stats["minutes_used_pct"]
+    minutes_fill_pct = min(minutes_pct, 100)
+    minutes_color = _cap_color(minutes_pct)
+    minutes_tile = f"""<div class="tile tile-minutes">
+    <div class="value">{stats['minutes_used_this_month']:.0f} / {stats['minutes_allowed_per_month']}</div>
+    <div class="label">Minutes used this month</div>
+    <div class="cap-bar-track"><div class="cap-bar-fill" style="width:{minutes_fill_pct:.0f}%;background:{minutes_color}"></div></div>
+    <span class="muted">{minutes_pct:.0f}% used &middot; {stats['minutes_remaining_this_month']:.0f} min remaining</span>
+    {render_trend(stats['minutes_pct_change'])}</div>"""
     week_tile = f"""<div class="tile">
     <div class="value">{stats['total_calls_this_week']}</div>
     <div class="label">Calls this week</div></div>"""
@@ -208,7 +220,10 @@ def render_stat_tiles(stats: dict[str, Any]) -> str:
     <div class="value">{stats['followups_needed_this_month']}</div>
     <div class="label">Follow-ups needed (this month)</div>
     {render_trend(stats['followups_pct_change'])}</div>"""
-    return f'<div class="tiles">{week_tile}{month_tile}{all_time_tile}{followups_tile}{after_html}</div>'
+    return (
+        f'<div class="tiles">{minutes_tile}{week_tile}{month_tile}{all_time_tile}'
+        f'{followups_tile}{after_html}</div>'
+    )
 
 
 def render_outcome_donut(resolved: int, followup: int) -> str:
@@ -604,16 +619,15 @@ def render_restaurant_page(
   <p class="meta">{len(calls)} call(s) logged. Data may be up to 20s stale (short cache to avoid re-reading the Sheet on every request). &middot;
     <a href="{escape(cfg.admin_path)}">Refresh</a> &middot;
     <a href="{escape(cfg.admin_path.rstrip('/'))}/contacts.csv">Export contacts (CSV)</a></p>
-  <div class="top-row">
-    <div class="top-row-cell">
-      {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"], stats["minutes_pct_change"])}
+  <div class="summary-row">
+    <div class="summary-main">
+      {render_stat_tiles(stats)}
     </div>
-    <div class="top-row-cell">
+    <div class="summary-side">
       <div class="donut-heading">Call outcome (this month)</div>
       {render_outcome_donut(stats["resolved_this_month"], stats["followups_needed_this_month"])}
     </div>
   </div>
-  {render_stat_tiles(stats)}
   <h3>What callers ask about</h3>
   {render_topic_breakdown(stats["topic_counts"])}
   <h3>Calls by hour of day (IST)</h3>
