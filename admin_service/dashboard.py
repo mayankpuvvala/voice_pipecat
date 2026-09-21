@@ -77,6 +77,16 @@ tr:hover td { background: #fbfbfd; }
 .trend-down { color: #dc2626; }
 .trend-flat { color: var(--text-muted); }
 .trend-note { font-weight: 400; color: var(--text-muted); }
+.donut-wrap { display: flex; align-items: center; gap: 24px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 16px 20px; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.donut { width: 120px; height: 120px; border-radius: 50%; position: relative; flex-shrink: 0; }
+.donut::after { content: ""; position: absolute; inset: 22px; background: #fff; border-radius: 50%; }
+.donut-center { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; }
+.donut-center .value { font-size: 1.15rem; font-weight: 700; }
+.donut-center .label { font-size: 0.62rem; color: var(--text-muted); }
+.donut-legend { display: flex; flex-direction: column; gap: 10px; font-size: 0.85rem; }
+.donut-legend-item { display: flex; align-items: center; gap: 8px; }
+.donut-legend-item .count { font-weight: 700; }
+.donut-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 """
 
 _CONFIDENCE_BADGES = {
@@ -194,6 +204,28 @@ def render_stat_tiles(stats: dict[str, Any]) -> str:
     return f'<div class="tiles">{week_tile}{month_tile}{all_time_tile}{followups_tile}{after_html}</div>'
 
 
+def render_outcome_donut(resolved: int, followup: int) -> str:
+    """Call outcome this month, Resolved vs Follow-up needed, as a donut —
+    pure CSS conic-gradient, no charting library."""
+    total = resolved + followup
+    if total == 0:
+        return '<p class="muted">No calls logged yet this month.</p>'
+    resolved_pct = resolved / total * 100
+    gradient = f"conic-gradient(#16a34a 0% {resolved_pct:.2f}%, #dc2626 {resolved_pct:.2f}% 100%)"
+    return f"""<div class="donut-wrap">
+  <div class="donut" style="background:{gradient}">
+    <div class="donut-center">
+      <div class="value">{resolved_pct:.0f}%</div>
+      <div class="label">Resolved</div>
+    </div>
+  </div>
+  <div class="donut-legend">
+    <div class="donut-legend-item"><span class="donut-swatch" style="background:#16a34a"></span> Resolved &middot; <span class="count">{resolved}</span></div>
+    <div class="donut-legend-item"><span class="donut-swatch" style="background:#dc2626"></span> Follow-up needed &middot; <span class="count">{followup}</span></div>
+  </div>
+</div>"""
+
+
 def render_topic_breakdown(topic_counts: dict[str, int]) -> str:
     if not topic_counts:
         return '<p class="muted">No categorized topics yet.</p>'
@@ -266,6 +298,17 @@ def render_call_row(call: dict[str, Any]) -> str:
 _FILTER_BAR = """
 <div class="filters">
   <div class="filter-group">
+    <label>Date range
+      <select id="date-preset" data-week="{week_start}" data-month="{month_start}" data-30d="{last_30d_start}" data-today="{today}">
+        <option value="custom" selected>Custom</option>
+        <option value="week">This week</option>
+        <option value="month">This month</option>
+        <option value="30d">Last 30 days</option>
+        <option value="all">All time</option>
+      </select>
+    </label>
+  </div>
+  <div class="filter-group">
     <label>From <input type="date" id="filter-from"></label>
     <label>To <input type="date" id="filter-to"></label>
   </div>
@@ -324,6 +367,7 @@ _FILTER_SCRIPT = """
 (function() {
   var fromEl = document.getElementById('filter-from');
   var toEl = document.getElementById('filter-to');
+  var presetEl = document.getElementById('date-preset');
   var countEl = document.getElementById('filter-count');
   var chipEl = document.getElementById('topic-filter-chip');
   var sortEl = document.getElementById('sort-by');
@@ -338,6 +382,7 @@ _FILTER_SCRIPT = """
   var selectedTopic = null;
   var matchedRows = [];
   var currentPage = 1;
+  var settingDatesProgrammatically = false;
 
   function checkedValues(selector) {
     return Array.prototype.slice.call(document.querySelectorAll(selector + ':checked'))
@@ -452,11 +497,39 @@ _FILTER_SCRIPT = """
     if (table) table.scrollIntoView({behavior: 'smooth', block: 'start'});
   }
 
+  function applyPreset() {
+    var val = presetEl.value;
+    if (val === 'custom') return;
+    settingDatesProgrammatically = true;
+    if (val === 'week') {
+      fromEl.value = presetEl.getAttribute('data-week');
+      toEl.value = presetEl.getAttribute('data-today');
+    } else if (val === 'month') {
+      fromEl.value = presetEl.getAttribute('data-month');
+      toEl.value = presetEl.getAttribute('data-today');
+    } else if (val === '30d') {
+      fromEl.value = presetEl.getAttribute('data-30d');
+      toEl.value = presetEl.getAttribute('data-today');
+    } else if (val === 'all') {
+      fromEl.value = '';
+      toEl.value = '';
+    }
+    settingDatesProgrammatically = false;
+    applyFilters();
+  }
+
   document.querySelectorAll('.f-outcome, .f-confidence, .f-escalation').forEach(function(el) {
     el.addEventListener('change', applyFilters);
   });
-  fromEl.addEventListener('change', applyFilters);
-  toEl.addEventListener('change', applyFilters);
+  fromEl.addEventListener('change', function() {
+    if (!settingDatesProgrammatically) presetEl.value = 'custom';
+    applyFilters();
+  });
+  toEl.addEventListener('change', function() {
+    if (!settingDatesProgrammatically) presetEl.value = 'custom';
+    applyFilters();
+  });
+  presetEl.addEventListener('change', applyPreset);
   sortEl.addEventListener('change', applyFilters);
   pageSizeEl.addEventListener('change', function() { currentPage = 1; renderPage(); });
   prevBtn.addEventListener('click', function() { currentPage -= 1; renderPage(); });
@@ -465,6 +538,7 @@ _FILTER_SCRIPT = """
   document.getElementById('filter-clear').addEventListener('click', function() {
     fromEl.value = '';
     toEl.value = '';
+    presetEl.value = 'all';
     document.querySelectorAll('.f-outcome, .f-confidence, .f-escalation').forEach(function(el) { el.checked = true; });
     sortEl.value = 'newest';
     setTopic(null);
@@ -484,6 +558,7 @@ _FILTER_SCRIPT = """
     followupsTile.addEventListener('click', function() {
       fromEl.value = followupsTile.getAttribute('data-from');
       toEl.value = followupsTile.getAttribute('data-to');
+      presetEl.value = 'custom';
       setChecked('.f-outcome', ['followup']);
       setChecked('.f-confidence', ['0', '1', '2', '3']);
       applyFilters();
@@ -497,13 +572,19 @@ _FILTER_SCRIPT = """
 """
 
 
-def render_call_table(calls: list[dict[str, Any]]) -> str:
+def render_call_table(calls: list[dict[str, Any]], stats: dict[str, Any]) -> str:
     columns = ["Call Time", "Caller", "Phone", "Topic", "Outcome", "Recording", "Confidence", "Escalation"]
     header = "".join(f"<th>{c}</th>" for c in columns)
     rows = "".join(render_call_row(c) for c in calls) or (
         f"<tr><td colspan='{len(columns)}'>No calls logged yet.</td></tr>"
     )
-    return f"""{_FILTER_BAR}<div class="table-wrap"><table id="call-table">
+    filter_bar = _FILTER_BAR.format(
+        week_start=stats["this_week_start_iso"],
+        month_start=stats["this_month_start_iso"],
+        last_30d_start=stats["last_30_days_start_iso"],
+        today=stats["today_iso"],
+    )
+    return f"""{filter_bar}<div class="table-wrap"><table id="call-table">
     <thead><tr>{header}</tr></thead><tbody>{rows}</tbody>
   </table></div>{_PAGINATION_BAR}{_FILTER_SCRIPT}"""
 
@@ -518,12 +599,14 @@ def render_restaurant_page(
     <a href="{escape(cfg.admin_path.rstrip('/'))}/contacts.csv">Export contacts (CSV)</a></p>
   {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"], stats["minutes_pct_change"])}
   {render_stat_tiles(stats)}
+  <h3>Call outcome (this month)</h3>
+  {render_outcome_donut(stats["resolved_this_month"], stats["followups_needed_this_month"])}
   <h3>What callers ask about</h3>
   {render_topic_breakdown(stats["topic_counts"])}
   <h3>Calls by hour of day (IST)</h3>
   {render_hour_chart(stats["hour_counts"])}
   <h3>Call log</h3>
-  {render_call_table(calls)}
+  {render_call_table(calls, stats)}
 """
     return _page(f"{cfg.display_name} — Dashboard", body)
 

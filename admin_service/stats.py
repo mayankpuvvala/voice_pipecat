@@ -117,16 +117,20 @@ def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -
         max(minutes_allowed_per_month - minutes_used_this_month, 0.0) if minutes_allowed_per_month else 0.0
     )
     followups_needed_this_month = sum(1 for c in this_month_calls if c.get("needs_followup"))
+    resolved_this_month = len(this_month_calls) - followups_needed_this_month
 
     return {
         "total_calls_all_time": len(calls),
         "total_calls_this_month": len(this_month_calls),
         "total_calls_this_week": len(this_week_calls),
         "followups_needed_this_month": followups_needed_this_month,
+        "resolved_this_month": resolved_this_month,
         "calls_pct_change": _pct_change(len(this_month_calls), len(previous_month_calls)),
         "followups_pct_change": _pct_change(followups_needed_this_month, followups_needed_previous_month),
         "minutes_pct_change": _pct_change(minutes_used_this_month, minutes_used_previous_month),
+        "this_week_start_iso": week_start.strftime("%Y-%m-%d"),
         "this_month_start_iso": now_ist.replace(day=1).strftime("%Y-%m-%d"),
+        "last_30_days_start_iso": (now_ist - timedelta(days=30)).strftime("%Y-%m-%d"),
         "today_iso": now_ist.strftime("%Y-%m-%d"),
         "minutes_used_this_month": minutes_used_this_month,
         "minutes_remaining_this_month": minutes_remaining_this_month,
