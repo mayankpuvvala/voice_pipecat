@@ -72,6 +72,11 @@ tr:hover td { background: #fbfbfd; }
 .route-list { list-style: none; margin: 0 0 1.5rem; padding: 6px 20px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); font-size: 0.85rem; }
 .route-list li { padding: 8px 0; border-bottom: 1px solid var(--border); }
 .route-list li:last-child { border-bottom: none; }
+.trend { font-size: 0.75rem; font-weight: 700; margin-top: 6px; }
+.trend-up { color: #16a34a; }
+.trend-down { color: #dc2626; }
+.trend-flat { color: var(--text-muted); }
+.trend-note { font-weight: 400; color: var(--text-muted); }
 """
 
 _CONFIDENCE_BADGES = {
@@ -132,29 +137,50 @@ def _cap_color(pct: float) -> str:
     return "#16a34a"
 
 
-def render_cap_bar(minutes_used: float, minutes_allowed: int, minutes_remaining: float, pct: float) -> str:
+def render_trend(pct_change: float) -> str:
+    """Month-over-month trend badge. Literal magnitude, not metric-specific
+    "good/bad" semantics: red for a decrease, green for an increase, gray
+    for no change or no previous-month baseline to compare against yet."""
+    if pct_change > 0:
+        css_class, arrow = "trend-up", "▲"
+    elif pct_change < 0:
+        css_class, arrow = "trend-down", "▼"
+    else:
+        css_class, arrow = "trend-flat", "＝"
+    sign = "+" if pct_change >= 0 else ""
+    return (
+        f'<div class="trend {css_class}">{arrow} {sign}{pct_change:.1f}% '
+        f'<span class="trend-note">vs last month</span></div>'
+    )
+
+
+def render_cap_bar(
+    minutes_used: float, minutes_allowed: int, minutes_remaining: float, pct: float, pct_change: float
+) -> str:
     fill_pct = min(pct, 100)
     color = _cap_color(pct)
     return f"""<div>
   <div class="cap-bar-track"><div class="cap-bar-fill" style="width:{fill_pct:.0f}%;background:{color}"></div></div>
   <span class="muted">{minutes_used:.0f} / {minutes_allowed} min used this month ({pct:.0f}%) &middot; {minutes_remaining:.0f} min remaining</span>
+  {render_trend(pct_change)}
 </div>"""
 
 
 def render_stat_tiles(stats: dict[str, Any]) -> str:
-    before = [
-        ("Calls this week", stats["total_calls_this_week"]),
-        ("Calls this month", stats["total_calls_this_month"]),
-        ("Calls all-time", stats["total_calls_all_time"]),
-    ]
+    week_tile = f"""<div class="tile">
+    <div class="value">{stats['total_calls_this_week']}</div>
+    <div class="label">Calls this week</div></div>"""
+    month_tile = f"""<div class="tile">
+    <div class="value">{stats['total_calls_this_month']}</div>
+    <div class="label">Calls this month</div>
+    {render_trend(stats['calls_pct_change'])}</div>"""
+    all_time_tile = f"""<div class="tile">
+    <div class="value">{stats['total_calls_all_time']}</div>
+    <div class="label">Calls all-time</div></div>"""
     after = [
         ("Avg call length", f"{stats['avg_call_minutes']:.1f} min"),
         ("Shortest / longest", f"{stats['min_call_minutes']:.1f} / {stats['max_call_minutes']:.1f} min"),
     ]
-    before_html = "".join(
-        f'<div class="tile"><div class="value">{v}</div><div class="label">{escape(k)}</div></div>'
-        for k, v in before
-    )
     after_html = "".join(
         f'<div class="tile"><div class="value">{v}</div><div class="label">{escape(k)}</div></div>'
         for k, v in after
@@ -163,8 +189,9 @@ def render_stat_tiles(stats: dict[str, Any]) -> str:
     data-from="{stats['this_month_start_iso']}" data-to="{stats['today_iso']}"
     title="Click to filter the call log below to this month's follow-ups">
     <div class="value">{stats['followups_needed_this_month']}</div>
-    <div class="label">Follow-ups needed (this month)</div></div>"""
-    return f'<div class="tiles">{before_html}{followups_tile}{after_html}</div>'
+    <div class="label">Follow-ups needed (this month)</div>
+    {render_trend(stats['followups_pct_change'])}</div>"""
+    return f'<div class="tiles">{week_tile}{month_tile}{all_time_tile}{followups_tile}{after_html}</div>'
 
 
 def render_topic_breakdown(topic_counts: dict[str, int]) -> str:
@@ -489,7 +516,7 @@ def render_restaurant_page(
   <p class="meta">{len(calls)} call(s) logged. Data may be up to 20s stale (short cache to avoid re-reading the Sheet on every request). &middot;
     <a href="{escape(cfg.admin_path)}">Refresh</a> &middot;
     <a href="{escape(cfg.admin_path.rstrip('/'))}/contacts.csv">Export contacts (CSV)</a></p>
-  {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"])}
+  {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"], stats["minutes_pct_change"])}
   {render_stat_tiles(stats)}
   <h3>What callers ask about</h3>
   {render_topic_breakdown(stats["topic_counts"])}
@@ -512,7 +539,7 @@ def render_super_admin_page(entries: list[tuple[RestaurantConfig, dict[str, Any]
         f"""<div class="tile">
       <div class="value">{escape(cfg.display_name)}</div>
       <div class="label">{stats["total_calls_this_month"]} calls this month &middot; {stats["followups_needed_this_month"]} follow-up(s) needed</div>
-      {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"])}
+      {render_cap_bar(stats["minutes_used_this_month"], stats["minutes_allowed_per_month"], stats["minutes_remaining_this_month"], stats["minutes_used_pct"], stats["minutes_pct_change"])}
     </div>"""
         for cfg, stats in entries
     )

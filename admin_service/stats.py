@@ -65,6 +65,21 @@ def _week_start(now_ist: datetime) -> datetime:
     return start_of_day - timedelta(days=start_of_day.weekday())
 
 
+def _previous_month(now_ist: datetime) -> tuple[int, int]:
+    if now_ist.month == 1:
+        return now_ist.year - 1, 12
+    return now_ist.year, now_ist.month - 1
+
+
+def _pct_change(current: float, previous: float) -> float:
+    """Percentage change vs. the previous month. No previous-month data
+    (e.g. this is the first month this restaurant has any calls at all) ->
+    0.0, shown as a neutral "+0.0%" rather than an undefined/infinite jump."""
+    if not previous:
+        return 0.0
+    return (current - previous) / previous * 100.0
+
+
 def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -> dict[str, Any]:
     """Everything the dashboard needs to render, for one restaurant's calls."""
     now_ist = datetime.now(IST)
@@ -74,6 +89,14 @@ def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -
         c for c in calls if (dt := _call_local_dt(c)) and dt.year == now_ist.year and dt.month == now_ist.month
     ]
     this_week_calls = [c for c in calls if (dt := _call_local_dt(c)) and dt >= week_start]
+
+    prev_year, prev_month = _previous_month(now_ist)
+    previous_month_calls = [
+        c for c in calls if (dt := _call_local_dt(c)) and dt.year == prev_year and dt.month == prev_month
+    ]
+    previous_month_minutes = [m for c in previous_month_calls if (m := _call_minutes(c)) is not None]
+    minutes_used_previous_month = sum(previous_month_minutes)
+    followups_needed_previous_month = sum(1 for c in previous_month_calls if c.get("needs_followup"))
 
     all_minutes = [m for c in calls if (m := _call_minutes(c)) is not None]
     month_minutes = [m for c in this_month_calls if (m := _call_minutes(c)) is not None]
@@ -100,6 +123,9 @@ def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -
         "total_calls_this_month": len(this_month_calls),
         "total_calls_this_week": len(this_week_calls),
         "followups_needed_this_month": followups_needed_this_month,
+        "calls_pct_change": _pct_change(len(this_month_calls), len(previous_month_calls)),
+        "followups_pct_change": _pct_change(followups_needed_this_month, followups_needed_previous_month),
+        "minutes_pct_change": _pct_change(minutes_used_this_month, minutes_used_previous_month),
         "this_month_start_iso": now_ist.replace(day=1).strftime("%Y-%m-%d"),
         "today_iso": now_ist.strftime("%Y-%m-%d"),
         "minutes_used_this_month": minutes_used_this_month,
