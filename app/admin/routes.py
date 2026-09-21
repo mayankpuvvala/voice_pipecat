@@ -50,8 +50,10 @@ _COLUMNS = [
 
 
 def _format_datetime(iso_ts: str) -> tuple[str, str, str]:
-    """Returns (date as dd:mm:yy, time as hh:mm:ss, date as yyyy-mm-dd for
-    filtering) in IST, or ("—", "—", "")."""
+    """Returns (date as dd/mm/yy, time as h:mm:ss am/pm, date as yyyy-mm-dd
+    for filtering) in IST, or ("—", "—", ""). dd/mm/yy with slashes (not
+    colons) and 12-hour time so the date doesn't read as a second clock
+    time stacked under the real one."""
     if not iso_ts:
         return "—", "—", ""
     try:
@@ -59,7 +61,9 @@ def _format_datetime(iso_ts: str) -> tuple[str, str, str]:
     except ValueError:
         return "—", "—", ""
     local = dt.astimezone(_IST)
-    return local.strftime("%d:%m:%y"), local.strftime("%H:%M:%S"), local.strftime("%Y-%m-%d")
+    date_str = local.strftime("%d/%m/%y")
+    time_str = local.strftime("%I:%M:%S %p").lstrip("0").lower()
+    return date_str, time_str, local.strftime("%Y-%m-%d")
 
 
 def _format_duration(duration_secs: Any) -> str:
