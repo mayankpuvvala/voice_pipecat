@@ -34,7 +34,6 @@ from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.evals.transport import EvalTransportParams
 from pipecat.services.sarvam.stt import SarvamSTTService
-from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
@@ -55,6 +54,7 @@ from app.pipeline.transcript import build_transcript
 from app.pipeline.tts_language_switcher import TTSLanguageSwitcher
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
 from app.services.resilient_stt import ResilientSarvamSTTService
+from app.services.rumik_tts import RumikTTSService
 from app.services.twilio_client import fetch_ice_servers_sync, lookup_caller_number
 from app.tools.end_call import end_call
 from app.tools.reservations import book_table, check_availability
@@ -320,21 +320,36 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             ),
         )
 
-    def _build_tts() -> SarvamTTSService:
-        # bulbul:v3 streams audio over its own WebSocket per chunk, unlike
-        # Rumik's one-shot HTTP call (see app/services/rumik_tts.py). No
-        # retry/fallback wrapper here yet — a TTS failure just ends the call.
-        return SarvamTTSService(
-            api_key=settings.sarvam_api_key,
-            settings=SarvamTTSService.Settings(
-                model="bulbul:v3",
-                # Starting locale only — tts_language_switcher.py flips this
-                # per reply to match the model's actual reply language.
-                language=Language.EN_IN,
-                # Lower than the default (50) so synthesis starts sooner,
-                # at some cost to prosody. 30 is Sarvam's server-side floor —
-                # going lower 422s and silently kills the call.
-                min_buffer_size=30,
+    def _build_tts() -> RumikTTSService:
+        # Rumik's mulberry model over its persistent per-call WebSocket (see
+        # app/services/rumik_tts.py) — ~6x cheaper per character than Sarvam
+        # (₹0.50 vs ₹3.00/1k chars) and, once the socket is warm, measured
+        # on par with Sarvam's own TTFA (2026-09-22: median 313ms across 10
+        # real utterances vs Sarvam's ~260ms; see that file's module
+        # docstring for the full writeup). Natively handles Hindi/English
+        # code-mixed text from the script alone, so — unlike Sarvam — it
+        # needs no per-reply language switch; tts_language_switcher.py stays
+        # wired below but is a no-op for this service (RumikTTSSettings has
+        # a `language` field for API-shape compatibility only; nothing in
+        # rumik_tts.py's synthesis payload reads it).
+        #
+        # No retry/fallback wrapper here — a TTS failure just ends the call,
+        # same posture Sarvam had (see rumik_tts.py's module docstring for
+        # why a mid-call OpenAI fallback isn't a good fit for either
+        # provider's persistent-WebSocket design).
+        #
+        # To revert to Sarvam: swap this for SarvamTTSService(api_key=
+        # settings.sarvam_api_key, settings=SarvamTTSService.Settings(
+        # model="bulbul:v3", language=Language.EN_IN, min_buffer_size=30))
+        # and restore `from pipecat.services.sarvam.tts import
+        # SarvamTTSService` + the SarvamTTSService branch in on_pipeline_error.
+        return RumikTTSService(
+            api_key=settings.rumik_api_key,
+            speaker="adam",
+            description=(
+                "a male, 30s, indian accent voice, normal pitch, smooth "
+                "timbre, conversational pacing, professional register, "
+                "like a restaurant host"
             ),
         )
 
@@ -418,16 +433,30 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         if isinstance(frame.processor, OpenAILLMService):
             # Means both the SDK's own retries and retry_on_timeout were exhausted.
             await call_health.note_llm_failure(frame.error)
-        elif isinstance(frame.processor, SarvamTTSService):
+        elif isinstance(frame.processor, RumikTTSService):
             # No retry/fallback wrapper for TTS yet — any error ends the call.
             await call_health.degrade_silently("tts", frame.error)
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)
 
+    greeted = False
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
+        nonlocal greeted
         logger.info("Caller connected")
+        if greeted:
+            # SmallWebRTC's underlying ICE connection can pass through
+            # "connected" more than once during a restart (e.g. after a TURN
+            # relay rejection — aioice.stun.TransactionFailed: "Forbidden
+            # IP" — forces a renegotiation), re-firing this event for the
+            # same call. Telephony transports (Exotel/Twilio) have no ICE
+            # concept and can't hit this. Without the guard, the bot's
+            # opening line gets queued and spoken twice.
+            logger.debug("on_client_connected fired again for this call — not re-greeting")
+            return
+        greeted = True
         await worker.queue_frames([TTSSpeakFrame(ACTIVE_RESTAURANT.first_message)])
 
     @transport.event_handler("on_client_disconnected")
