@@ -1,25 +1,13 @@
-"""One-time interactive setup for app/services/drive_oauth_client.py.
+"""One-time interactive setup for drive_oauth_client.py.
 
-Run with `python -m app.services.drive_oauth_setup`. Opens your default
-browser to Google's consent screen; after you approve, prints a refresh
-token to paste into .env (locally) and Railway's variables (deployed) as
-GOOGLE_OAUTH_REFRESH_TOKEN. Requires GOOGLE_OAUTH_CLIENT_ID and
-GOOGLE_OAUTH_CLIENT_SECRET to already be set — see drive_oauth_client.py's
-docstring for how to create those.
+Run with `python -m app.services.drive_oauth_setup`. Opens the consent
+screen and prints a refresh token to set as GOOGLE_OAUTH_REFRESH_TOKEN.
+Requires GOOGLE_OAUTH_CLIENT_ID/SECRET already set.
 
-Onboarding another restaurant onto the same machine/.env? Set RESTAURANT_ID
-to its id before running this — the printed variable name comes out
-suffixed for that restaurant (see app/config/settings.py's _restaurant_env),
-so its credentials can sit alongside another restaurant's without
-overwriting them. The Google account you consent as must already be listed
-under that GCP project's OAuth consent screen -> Test users, or Google
-blocks the sign-in with "Access blocked" before you can even pick it.
-
-Only needs to be run once per restaurant. The refresh token doesn't expire
-under normal use (only if explicitly revoked, unused for 6 months, or the
-OAuth consent screen is still in "Testing" mode and the 7-day testing-token
-limit applies — if uploads start failing with an auth error after a week,
-that's the likely cause: publish the OAuth consent screen, or re-run this).
+Set RESTAURANT_ID before running to onboard another restaurant — the
+printed variable name comes out suffixed (see settings.py's
+_restaurant_env). If uploads fail after a week, the OAuth consent screen
+is probably still in "Testing" mode — publish it, or re-run this.
 """
 
 from __future__ import annotations

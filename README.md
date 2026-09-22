@@ -163,7 +163,7 @@ directly — see `Dockerfile`.
 
 `eval_scenarios/manifest.yaml` lists 29 behavioral scenarios (text and
 audio) run against a fresh `app/main.py -t eval` bot per scenario, judged by
-`gpt-4o-mini`. This costs real OpenAI/Sarvam API calls and writes real rows
+`gpt-5-mini`. This costs real OpenAI/Sarvam API calls and writes real rows
 to the configured Google Sheet — every scenario's caller name/phone is
 prefixed `ZZ-EVALTEST` so they're easy to find and delete afterward.
 

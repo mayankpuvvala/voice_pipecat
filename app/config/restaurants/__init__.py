@@ -19,13 +19,8 @@ from app.config.settings import settings
 @dataclass(frozen=True)
 class TopicFacts:
     """One optional block of system-prompt facts, included only when the
-    caller's own words suggest it's actually relevant this call.
-
-    See app/pipeline/dynamic_prompt.py for how `keywords` gets matched
-    against the conversation and app/pipeline/prompts.py's
-    build_system_prompt for how `text` gets spliced in. Kept as data here
-    (not logic) so each restaurant's config owns its own topic split
-    without touching the matching code.
+    caller's own words suggest it's relevant. See dynamic_prompt.py for
+    keyword matching and prompts.py's build_system_prompt for splicing.
     """
 
     keywords: tuple[str, ...]
@@ -41,16 +36,16 @@ class Restaurant:
     system_prompt: str
     timezone: str
     hours: dict[int, list[tuple[str, str]]]
-    # Facts that most calls never touch (full menu, membership perks,
-    # seating/ambience, etc.) — left out of system_prompt itself and only
-    # spliced in once the caller actually asks about that topic. See this
-    # file's TopicFacts docstring and app/pipeline/dynamic_prompt.py.
+    # Facts most calls never touch — spliced in only once the caller asks
+    # about that topic. See TopicFacts docstring and dynamic_prompt.py.
     topic_facts: tuple[TopicFacts, ...] = ()
+    # Real cell number (E.164) for real-time human-escalation SMS — see
+    # log_interaction.write_interaction_row. Never guess this; leave blank
+    # until the client confirms their real number.
+    owner_phone: str = ""
 
 
-# Imported after `Restaurant` is defined above, not before: each client
-# module imports `Restaurant` from this package, so this package's own
-# class definition has to exist first.
+# Imported after `Restaurant` is defined — each client module imports it from here.
 from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN  # noqa: E402
 from app.config.restaurants.zero40 import ZERO40_BREWING  # noqa: E402
 

@@ -24,13 +24,8 @@ def setup_call_tracing() -> bool:
     auth = base64.b64encode(
         f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()
     ).decode()
-    # OTLPSpanExporter only auto-appends "/v1/traces" when it falls back to
-    # its own default endpoint — an explicit `endpoint=` (like this one) is
-    # posted to verbatim. Langfuse's OTel ingestion route lives at
-    # /api/public/otel/v1/traces, not /api/public/otel, so leaving the
-    # suffix off 404s on every single span batch (silent otherwise — this
-    # only surfaces as a "Failed to export span batch code: 404" warning
-    # from the OTel SDK itself, not from anything in this codebase).
+    # An explicit `endpoint=` is posted to verbatim, unlike the default —
+    # Langfuse's OTel route needs the full /v1/traces suffix or it 404s silently.
     exporter = OTLPSpanExporter(
         endpoint=f"{settings.langfuse_host}/api/public/otel/v1/traces",
         headers={"Authorization": f"Basic {auth}", "x-langfuse-ingestion-version": "4"},

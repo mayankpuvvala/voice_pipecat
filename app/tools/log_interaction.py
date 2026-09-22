@@ -1,14 +1,10 @@
 """The `logInteraction` tool: logs each resolved/unresolved call topic
-directly to the same Google Sheet tab n8n used to write to.
+directly to Google Sheets (moved off an n8n webhook that risked cold-start
+dead air mid-call — see app.services.sheets_client).
 
-Moved off the n8n webhook it originally POSTed to: that webhook ran live, in
-the middle of a call, and Railway's free-tier n8n can cold-start — dead air
-on a real call. This writes straight to Sheets from this same process
-instead (see app.services.sheets_client), no extra hop. n8n's remaining jobs
-are non-time-critical and read this sheet after the fact (end-of-day digest,
-escalation alert) — see n8n/restaurant_reception_workflow.json; its
-`1a`-`1f` live-webhook branch is dead now and should be removed next time
-that workflow is touched.
+Human escalation: an SMS to RESTAURANT.owner_phone fires the moment a row
+is written with resolved=false — the single place every escalation path
+converges. Never blocks/raises on send failure.
 """
 
 from __future__ import annotations
@@ -23,19 +19,12 @@ from pipecat.services.llm_service import FunctionCallParams
 
 from app.config.restaurants import ACTIVE_RESTAURANT as RESTAURANT
 from app.services import sheets_client
+from app.services.twilio_client import send_sms
 
 _INTERACTIONS_SHEET = "Sheet1"
 
-# The model sometimes re-calls this 2-3x in quick succession for what's
-# really one moment (e.g. a reservation confirmed three times, ~1s apart,
-# reworded each time) — separate from LogInteractionEnforcer's own bounded
-# nudge, this is the model second-guessing itself. An in-process cache is
-# fine since one process handles a call's full duration; no need to
-# survive restarts or share across processes.
-#
-# Entries are overwritten on a repeat call_session_id, never deleted at
-# call-end (there's no teardown hook) — _PRUNE_AFTER_SECS instead drops
-# anything too stale to matter for the dedupe window, on the next write.
+# The model sometimes re-calls this 2-3x for what's really one moment.
+# _PRUNE_AFTER_SECS drops stale entries on write since there's no teardown hook.
 _DEDUPE_WINDOW_SECS = 10.0
 _PRUNE_AFTER_SECS = 3600.0
 _recent_topics: dict[str, tuple[str, float]] = {}
@@ -65,11 +54,9 @@ async def write_interaction_row(
 ) -> bool:
     """The actual dedupe + Sheets write behind the `log_interaction` tool below.
 
-    Split out so `app/pipeline/logging_enforcer.py`'s background backfill call
-    (a real LLM classifying a reply the model itself didn't log) can write a
-    row the same way, without needing to fake a `FunctionCallParams`. Returns
-    whether a row was actually written -- False on a Sheets error; treated as
-    success (True) for a deduped repeat, since the topic is already logged.
+    Split out so logging_enforcer.py's background backfill can write a row
+    without faking a `FunctionCallParams`. Returns False only on a real
+    Sheets error — a deduped repeat counts as success.
     """
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc.astimezone(ZoneInfo(RESTAURANT.timezone))
@@ -107,6 +94,21 @@ async def write_interaction_row(
     except Exception:
         logger.exception("Failed to log interaction to Sheets")
         return False
+
+    if not resolved and RESTAURANT.owner_phone:
+        who = caller_name or "A caller"
+        callback = f" ({caller_phone})" if caller_phone else ""
+        body = (
+            f"{RESTAURANT.name}: {who}{callback} needs a follow-up — {topic}. "
+            f"{details}".strip()
+        )
+        sent = await send_sms(RESTAURANT.owner_phone, body)
+        logger.info(
+            "Escalation SMS to owner for call {} (topic={!r}): sent={}",
+            call_session_id,
+            topic,
+            sent,
+        )
 
     return True
 

@@ -43,8 +43,10 @@ from app.admin.routes import register_admin_routes
 from app.config.restaurants import ACTIVE_RESTAURANT
 from app.config.settings import settings
 from app.live_client import register_live_test_client
+from app.pipeline import active_calls
 from app.pipeline.call_health import CallHealthMonitor
 from app.pipeline.dynamic_prompt import DynamicPromptInjector
+from app.pipeline.idle_post_processor import idle_post_processing_loop
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
 from app.pipeline.recording import save_call_recording
@@ -219,6 +221,15 @@ async def _configure_log_verbosity() -> None:
     logger.add(sys.stderr, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
+@runner_app.on_event("startup")
+async def _start_idle_post_processing() -> None:
+    # Fire-and-forget for the life of the process — never awaited, so it
+    # can't delay startup or block a real call. Gated by active_calls.is_idle
+    # inside the loop itself, so this is safe to always start.
+    if settings.idle_post_processing_enabled:
+        asyncio.create_task(idle_post_processing_loop())
+
+
 transport_params = {
     "exotel": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
@@ -250,6 +261,19 @@ transport_params = {
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
+    """Tracks this call in active_calls (see that module's docstring) for
+    the idle post-processing gate, then hands off to the real bot logic.
+    try/finally around the whole call, not just the happy path, so a setup
+    failure can never leak a permanently "active" call and wedge the idle
+    gate shut."""
+    active_calls.call_started()
+    try:
+        await _run_bot_impl(transport, runner_args)
+    finally:
+        active_calls.call_ended()
+
+
+async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     logger.info("Starting bot for {}", ACTIVE_RESTAURANT.name)
 
     call_session_id = getattr(runner_args, "session_id", None) or ""

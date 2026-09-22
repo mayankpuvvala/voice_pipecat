@@ -1,18 +1,10 @@
 """The `end_call` tool: hangs up once the conversation is actually over.
 
-Queues an EndWorkerFrame — pipecat flushes any already-queued farewell
-reply before closing the connection, so this never cuts the bot off
-mid-sentence.
-
+Queues an EndWorkerFrame — pipecat flushes any queued farewell first.
 Prompt wording alone doesn't reliably stop the model from ending calls
-wrong (confirmed live twice), so this enforces two gates structurally via
-turn_taking_guard:
-1. Refuse if nothing has been spoken to the caller this turn yet (a real
-   run called book_table -> logInteraction -> end_call with zero spoken
-   text, hanging up with the caller unsure if they had a table).
-2. Refuse if the spoken text claims a booking that book_table never
-   actually confirmed (the model narrated a fake "you're all set"
-   instead of calling book_table — worse than the silent hangup above).
+wrong, so this enforces two gates via turn_taking_guard: refuse if nothing
+was spoken yet this turn, and refuse if the spoken text claims a booking
+book_table never actually confirmed.
 """
 
 from __future__ import annotations

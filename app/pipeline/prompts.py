@@ -1,27 +1,8 @@
 """Builds the final system prompt handed to the LLM.
 
-This is the restaurant's ported Vapi prompt plus the real additions this port
-needs on top of it: a language instruction (Vapi pinned its transcriber to
-English; this pipeline's Sarvam STT doesn't, so the model needs telling to
-actually respond in kind), a brevity instruction (a live test call came back
-sounding like a form being read aloud — multiple questions stacked into one
-turn, unsolicited extra detail — so this is called out explicitly and given
-its own block rather than left as one easily-outweighed bullet buried in the
-base prompt's rules list), a redirect for off-topic/personal messages (a live
-call showed the model going silent on pure small talk like "how are you" --
-none of the restaurant's own rules cover that case, since it isn't a real
-restaurant question and isn't the "don't know the answer" case either), a
-guard against confidently answering a mis-transcribed word as if it were a
-real menu item (a live call had the model tell a caller "we don't have a
-dish called world fish" after ASR mangled "what fish is that?" -- the fix
-is to ask the caller to repeat rather than parroting the garbled term
-back), the current date/time (needed to resolve relative dates like
-"tomorrow" into an exact date for the reservation tools), a hard gate on
-confirming a reservation without calling those tools, and a note that
-logInteraction isn't one of its tools (a separate background process logs
-every reply instead — see app/pipeline/logging_enforcer.py — after calling
-it inline turned out to force a silent tool-call-only round before every
-spoken reply, doubling LLM latency per turn).
+Layers the restaurant's ported Vapi prompt with additions this port needs:
+language handling, brevity, off-topic redirects, mis-transcription guards,
+current date/time, a reservation-tool gate, and a logInteraction note.
 """
 
 from __future__ import annotations
@@ -86,6 +67,29 @@ Only end the call per the ending rule below if they indicate they're
 actually done."""
 
 
+_ESCALATION_INSTRUCTION = """
+
+# When to hand off to the owner instead of continuing to try
+Treat each of these as needing the owner's attention right now, not as
+something to keep working on yourself:
+- The caller explicitly asks for a human, a real person, a manager, or the
+  owner — honor this immediately, don't first try to talk them out of it or
+  prove you can help.
+- You've already answered or redirected the same request twice and the
+  caller is still not satisfied, still repeating themselves, or still
+  rephrasing the same ask.
+- You genuinely don't know the answer (already covered by the "don't know"
+  rule above).
+In every one of these cases, do the same thing: say something like "Let me
+take your name and number so the owner can call you back," then take their
+name, callback number, and their exact question — exactly the flow already
+described above for something outside your facts. Don't invent a different
+phrase for "explicitly asked for a human" versus "you don't know" — to the
+caller it should feel like the same smooth handoff either way. This is what
+actually gets the owner notified in real time, so don't quietly keep trying
+past this point hoping to figure it out."""
+
+
 _UNCLEAR_INPUT_INSTRUCTION = """
 
 # When a transcript names something that doesn't exist
@@ -127,8 +131,19 @@ _RESERVATION_TOOL_INSTRUCTION = """
 
 # Booking a reservation — never confirm without calling the tools
 - Before calling book_table you need all four: name, guest count, date,
-  time. Ask for missing ones one at a time (per the brevity rule). Never
-  call book_table with a blank/guessed name — it will be rejected.
+  time. A caller often gives several of these at once, in any order,
+  possibly in their very first message ("table for 4 tomorrow at 8, name's
+  Priya") — extract every one you can from whatever they just said before
+  asking for anything. Only ask for the ones that are still actually
+  missing after that, one at a time (per the brevity rule). Never ask
+  again for a detail the caller already gave, whether it arrived in this
+  same message or an earlier turn — check what you already have first.
+  Never call book_table with a blank/guessed name — it will be rejected.
+- Phone number is NOT one of the four and is never required for a
+  reservation (see rule 2 above) — do not ask for it. book_table accepts
+  it only for the rare case a caller volunteers one unprompted; leave it
+  blank otherwise. Taking a callback number is a different flow entirely
+  (see rule 4), for when you can't help directly, not for a normal booking.
 - If the caller corrects a detail while you're still gathering these, use
   the corrected value and move straight on — don't restart the gathering
   flow or re-ask for anything you already have.
@@ -142,8 +157,8 @@ _RESERVATION_TOOL_INSTRUCTION = """
   not to restate what they said. If they correct anything, read the
   corrected version back again too.
 - Only once confirmed, call book_table with those details plus name (and
-  phone if given). Only say the table is confirmed after book_table
-  returns booked: true.
+  phone only if the caller volunteered one earlier). Only say the table is
+  confirmed after book_table returns booked: true.
 - If check_availability or book_table returns false, do NOT confirm a
   table — explain why if given, and offer to take a name/number for the
   owner instead.
@@ -175,11 +190,9 @@ question is not the same as being done)."""
 def build_system_prompt(
     restaurant: Restaurant, active_topics: frozenset[TopicFacts] = frozenset()
 ) -> str:
-    """`active_topics` selects which of `restaurant.topic_facts` to splice in
-    (matched by keyword against the call so far — see
-    app/pipeline/dynamic_prompt.py). Defaults to none, i.e. the leanest
-    prompt, for the initial system_instruction the LLM service is
-    constructed with before the caller has said anything.
+    """`active_topics` selects which `restaurant.topic_facts` to splice in
+    (matched by keyword — see app/pipeline/dynamic_prompt.py). Defaults to
+    none, for the leanest initial system_instruction before the caller speaks.
     """
     topic_blocks = "".join(f"\n\n{topic.text}" for topic in restaurant.topic_facts if topic in active_topics)
     return (
@@ -189,6 +202,7 @@ def build_system_prompt(
         + _BREVITY_INSTRUCTION
         + _OFF_TOPIC_INSTRUCTION
         + _BOT_DISCLOSURE_INSTRUCTION
+        + _ESCALATION_INSTRUCTION
         + _UNCLEAR_INPUT_INSTRUCTION
         + _current_time_instruction(restaurant)
         + _RESERVATION_TOOL_INSTRUCTION

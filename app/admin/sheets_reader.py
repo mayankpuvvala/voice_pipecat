@@ -1,17 +1,9 @@
 """Reads call data straight from the same Google Sheet the live-call tools
-write to.
+write to — there's no local database, so this is the admin page's only
+data source. Read-only, separate from sheets_client's read+write client.
 
-This project has no local database — the sheet itself is the only record of
-past calls, so the admin page's data source is a read of the sheet rather
-than a synced copy. Read-only scope, deliberately separate from
-app.services.sheets_client's read+write client used by the live-call tools.
-
-fetch_calls() is cached for _CACHE_TTL_SECONDS: each admin_page() request
-issued 3 separate Sheets API calls (Sheet1/Bookings/Recordings) with no
-reuse, multiplied by every refresh or concurrent viewer for no benefit —
-nothing here changes faster than a human would notice. The cache is
-in-process/per-worker, holding only the last successful result; a failed
-fetch is never cached, so a transient Sheets error can't paper over itself.
+fetch_calls() is cached for _CACHE_TTL_SECONDS (per-worker, last result
+only) so refreshes don't re-issue 3 Sheets API calls for no benefit.
 """
 
 from __future__ import annotations
@@ -66,10 +58,8 @@ def read_rows(sheet_name: str) -> list[dict[str, Any]]:
 
 
 def _read_rows_safe(sheet_name: str) -> list[dict[str, Any]]:
-    """Like read_rows, but a missing/misnamed tab degrades that tab's data
-    to empty instead of failing the whole admin page — a deployment that's
-    only set up Sheet1 + Bookings so far should still see call/booking data
-    even before a Recordings tab exists."""
+    """Like read_rows, but a missing/misnamed tab degrades to empty data
+    instead of failing the whole admin page."""
     try:
         return read_rows(sheet_name)
     except Exception:
@@ -110,11 +100,8 @@ def fetch_calls() -> list[dict[str, Any]]:
 
 def _fetch_calls_uncached() -> list[dict[str, Any]]:
     """Join Sheet1 (per-topic interactions), Bookings, and Recordings into
-    one row per call, keyed by CallSessionId — newest first.
-
-    Rows that predate the CallSessionId column (blank id) all collapse into
-    a single "" bucket and will look like one jumbled call; that's a known
-    limitation for a handful of legacy rows, not worth special-casing.
+    one row per call, keyed by CallSessionId — newest first. Rows predating
+    that column (blank id) all collapse into one jumbled "" bucket.
     """
     interactions = _read_rows_safe("Sheet1")
     bookings = _read_rows_safe("Bookings")
@@ -172,6 +159,15 @@ def _fetch_calls_uncached() -> list[dict[str, Any]]:
         call["duration_secs"] = row.get("DurationSecs", "")
         call["transcript"] = row.get("Transcript", "")
         call["summary"] = row.get("Summary", "")
+        # Idle-triggered whole-transcript analysis (app/pipeline/
+        # idle_post_processor.py) — more reliable than the live per-topic
+        # self-report above, but only exists once a call's actually been
+        # processed. Falls back to the live-derived values above until then.
+        if row.get("PostProcessedAt", "").strip():
+            post_rank = _CONFIDENCE_RANK.get(str(row.get("PostConfidence", "")).strip().lower(), 0)
+            if post_rank:
+                call["confidence_rank"] = post_rank
+            call["escalated"] = str(row.get("Escalated", "")).strip().lower() == "true"
 
     result = list(calls.values())
     result.sort(key=lambda c: c["timestamp"], reverse=True)

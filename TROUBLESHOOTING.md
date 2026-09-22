@@ -8,8 +8,8 @@ outages mid-call. Ordered roughly by how likely you are to hit each one.
 
 ## Conversational LLM model choice (OPENAI_MODEL)
 
-**Cause for the switch away from gpt-4o-mini.** Investigating turn latency
-(see the next section) led to directly benchmarking gpt-4o-mini against
+**Cause for the switch away from gpt-5-mini.** Investigating turn latency
+(see the next section) led to directly benchmarking gpt-5-mini against
 newer OpenAI models on this account (gpt-4.1-nano, gpt-5-nano, gpt-5.4-nano,
 gpt-5.4-mini) using this app's actual system prompt and tool schemas, not a
 synthetic prompt. Two independent findings, both reproducible across 6 
@@ -17,7 +17,7 @@ repeat trials each:
 
 - **Relative-date resolution.** Asked "what's the exact date this Saturday"
   with the real current-date instruction in the prompt (today =
-  Fri 2026-09-18, so "this Saturday" = 2026-09-19): gpt-4o-mini answered
+  Fri 2026-09-18, so "this Saturday" = 2026-09-19): gpt-5-mini answered
   wrong (picked the *following* Saturday, 2026-09-24) 4 times out of 5.
   gpt-5.4-nano got it right 5/5, then 6/6 on a second pass.
   check_availability/book_table trust whatever date the model resolves —
@@ -26,7 +26,7 @@ repeat trials each:
   caller notices the wrong date being read back to them and objects.
 - **logInteraction reliability.** Asked a plain one-sentence factual
   question ("what time do you close tonight") with the real tools
-  attached: gpt-4o-mini answered the question correctly but called the
+  attached: gpt-5-mini answered the question correctly but called the
   actual `log_interaction` tool 0 times out of 6 — every time, it wrote a
   fake `logInteraction({...})` call into its spoken reply as literal text
   instead (silently non-fatal in production only because
@@ -36,7 +36,7 @@ repeat trials each:
   same test against the original, untouched prompt from before that
   session's edits, which also scored 0/6. gpt-5.4-nano scored 6/6 on the
   identical test.
-- **Speed.** Time-to-first-token, same prompt: gpt-4o-mini ~1.33s avg,
+- **Speed.** Time-to-first-token, same prompt: gpt-5-mini ~1.33s avg,
   gpt-5.4-nano ~1.15s avg — comparable, gpt-5.4-nano if anything faster.
   gpt-5-nano (the non-".4" nano) is a reasoning model that burns several
   seconds on hidden reasoning tokens before answering — ~10s+ TTFT,
@@ -188,18 +188,37 @@ the conversation. If you instead see a real synchronous gap before the next
 turn starts, check whether that reply sounded like a goodbye — that's the one
 remaining case that still blocks.
 
-**Separately, still real but unrelated to this:** Rumik's TTS doesn't stream
-— it waits for the full utterance to synthesize before any audio plays. For
-longer replies that's a second or more of avoidable silence before the
-caller hears anything, on top of the above. (Update 2026-09-18: TTS moved to
-Sarvam bulbul:v3, which does stream — see `_build_tts` in app/main.py. Kept
-this note since a future TTS change could reintroduce the same issue; check
-whether the provider actually streams before assuming it doesn't matter.)
+**Separately, still real but unrelated to this:** the *original* Rumik
+integration didn't stream — `app/services/rumik_tts.py` called Rumik's
+one-shot `POST /v1/tts` endpoint, which waits for the full utterance to
+synthesize before any audio plays. For longer replies that's a second or
+more of avoidable silence before the caller hears anything, on top of the
+above. (Update 2026-09-18: TTS moved to Sarvam bulbul:v3, which does stream
+— see `_build_tts` in app/main.py. Update 2026-09-22: turns out this
+wasn't a Rumik limitation, just an implementation gap — Rumik does have a
+streaming WebSocket endpoint (`POST /v1/tts/ws-connect` mints a session,
+then the socket delivers raw PCM chunks as they're generated — see
+https://docs.rumik.ai/streaming.md). First pass minted a fresh session per
+utterance (still slow: ~0.8-1.8s TTFA — cheaper than a full one-shot buffer
+but still paying a connect round trip every turn). Found Rumik's own
+maintained pipecat package (github.com/ira-rumik/pipecat-rumik) keeps ONE
+session open for the whole call instead; `rumik_tts.py` now does the same.
+Measured for real (10 utterances through an actual pipecat pipeline, real
+RUMIK_API_KEY): turn 1 (pays the one-time mint+handshake) 609ms, turns
+2-10 on the reused socket median 313ms — close to Sarvam's own ~260ms.
+`_build_tts` in app/main.py now returns `RumikTTSService` again (Sarvam
+stays as STT, untouched). NOT yet tested against a real phone call
+end-to-end — this was direct-to-API through a minimal test pipeline, not a
+live telephony call, so pronunciation/audio quality and real barge-in
+behavior still need a real call before fully trusting this. Checked
+mulberry-1.6 too as a possible alternative — female voices only, no
+Hindi/English code-mixed support, not usable here, stay on plain
+`mulberry`.)
 
 **Also checked and ruled out: system prompt size.** Tempting to assume a
 smaller prompt speaks faster. Measured directly: a 52-token prompt and the
 real ~3,700-token system prompt showed the *same* time-to-first-token
-distribution (~0.8-2.3s) against gpt-4o-mini/gpt-5.4-nano — OpenAI's
+distribution (~0.8-2.3s) against gpt-5-mini/gpt-5.4-nano — OpenAI's
 serving latency here isn't dominated by prompt size, especially once
 automatic prompt caching kicks in (confirmed via
 `usage.prompt_tokens_details.cached_tokens` — ~98% of a repeated system
@@ -410,7 +429,7 @@ restaurant to `_RESTAURANTS` if it's genuinely new.
 ## Groq LLM (GROQ_ENABLED) — measured too slow to turn on yet
 
 **Cause.** Tried Groq (Llama/gpt-oss/Qwen on LPU inference hardware) as a
-faster conversational LLM than OpenAI, since gpt-4o-mini's own 1-3s
+faster conversational LLM than OpenAI, since gpt-5-mini's own 1-3s
 completion time is the biggest remaining lever on turn latency (everything
 else — TTS buffering, the logging-enforcer background fix — was already
 addressed; see the first section of this file). Two real problems found

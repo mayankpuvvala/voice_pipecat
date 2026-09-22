@@ -1,26 +1,9 @@
 """Facts + system prompt for Zero40 Brewing (Financial District / Kokapet).
 
-Client-demo config, built for showcasing the agent to Zero40 rather than
-from a live client handoff — facts below are sourced from zero40.com,
-its contactless-menu page, third-party listings (magicpin, explorehyd,
-search results for hours), and a Zomato listing page pasted in directly,
-not from Zero40 directly, so treat hours, prices, and the exact address
-as needing a client confirmation pass before this goes anywhere near a
-real phone line. Two real Zero40 locations exist (Jubilee Hills and
-Financial District/Gowlidoddy/Nanakramguda); "Kokapet" per the request
-maps to the Financial District one, since that's the neighborhood it's
-actually in — flag this to the client rather than assuming it's exactly
-right. Also worth flagging: the Zomato listing for the Jubilee Hills
-branch specifically shows "Temporarily closed for dining, will be back
-soon!" as of when this was pulled — that status is for Jubilee Hills, not
-necessarily the Financial District/Kokapet branch this config is built
-around, but it's a live-status thing worth the client confirming either
-way before this goes live.
-
-Structure mirrors spice_route_kitchen.py (see that file's own docstring
-for why the reservation flow asks one thing at a time); `app/pipeline/
-prompts.py` appends further instructions (language, brevity, current
-time, the reservation-tool gate, logging) on top of this, same as there.
+Client-demo config sourced from public listings, not a live client
+handoff — hours, prices, and address need a client confirmation pass
+before this goes near a real phone line. Structure mirrors
+spice_route_kitchen.py; app/pipeline/prompts.py appends further instructions.
 """
 
 from __future__ import annotations
@@ -139,9 +122,9 @@ Rating: 4.4 out of 5 on Zomato (7,000+ ratings) — mention only if a caller ask
 
 ZERO40_BREWING = Restaurant(
     name="Zero40 Brewing",
-    bot_name="Riya",
+    bot_name="Anil",
     first_message=(
-        "Thanks for calling Zero40 Brewing, this is Riya — how can I help?"
+        "Thanks for calling Zero40 Brewing, this is Anil — how can I help?"
     ),
     end_call_message="Thanks so much for calling Zero40 Brewing — cheers, and talk soon!",
     timezone="Asia/Kolkata",
@@ -154,7 +137,7 @@ ZERO40_BREWING = Restaurant(
         5: [("12:00", "23:55")],  # Saturday
         6: [("10:00", "23:55")],  # Sunday — brunch/breakfast starts earlier
     },
-    system_prompt="""You are Riya, a warm and efficient phone receptionist for Zero40 Brewing, a microbrewery and pub in India. You answer every call directly — be a normal, friendly brewery receptionist.
+    system_prompt="""You are Anil, a warm and efficient phone receptionist for Zero40 Brewing, a microbrewery and pub in India. You answer every call directly — be a normal, friendly brewery receptionist.
 
 === ZERO40 FACTS (sourced from zero40.com and public listings, not confirmed directly with the client — verify hours/prices/address before this goes live) ===
 Name: Zero40 Brewing
@@ -183,4 +166,7 @@ Rules:
 - Never mention tool names, JSON, or "the system" to the caller.
 """,
     topic_facts=(_MENU_TOPIC, _MEMBERSHIP_TOPIC, _SEATING_TOPIC, _ACCESSIBILITY_TOPIC, _POLICY_COST_TOPIC),
+    # Not set: front-desk numbers above aren't a real person's cell.
+    # Get the actual owner/manager's number from the client first.
+    owner_phone="",
 )

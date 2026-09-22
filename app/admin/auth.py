@@ -1,7 +1,6 @@
-"""HTTP Basic auth gate for the admin page — mirrors ai-receptionist's
-require_admin. No-ops (open access) only if ADMIN_USERNAME/ADMIN_PASSWORD
-aren't set, which is fine for a first local check but NOT once this is on a
-public Railway URL — set real credentials before sharing that link.
+"""HTTP Basic auth gate for the admin page. No-ops (open access) if
+ADMIN_USERNAME/ADMIN_PASSWORD aren't set — set real credentials before
+sharing a public URL.
 """
 
 from __future__ import annotations

@@ -1,30 +1,12 @@
 """Google Drive uploads for call recordings, authorized as an actual human
-Google account (OAuth) rather than a service account.
+Google account (OAuth) rather than a service account — service accounts
+have had zero Drive storage quota since 2021, so they can never own a file.
 
-Service accounts have had zero Drive storage quota since 2021 — confirmed
-live via storageQuotaExceeded on an actual upload attempt, not just docs —
-so a service account can never own a file in a regular Drive no matter what
-a folder shares with it. Uploading as a real account uses that account's own
-quota instead, works on a plain free Gmail account, no Workspace needed.
+`drive.file` scope only grants access to what this OAuth grant itself
+created. One-time setup: see drive_oauth_setup.py.
 
-`drive.file` scope (not full `drive`) — narrowest scope that still lets this
-create and later reuse its own "Call Recordings" folder; it doesn't grant
-access to anything the user didn't create through this same OAuth grant.
-
-One-time setup (see also drive_oauth_setup.py):
-1. In the same GCP project as the service account, configure the OAuth
-   consent screen if not already done (App name, your email as test user —
-   Testing publishing status is fine, only your own account needs to grant
-   consent) and create an OAuth Client ID of type "Desktop app".
-2. Set GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET.
-3. Run `python -m app.services.drive_oauth_setup` — opens a browser for a
-   one-time consent grant, prints a refresh token. Set that as
-   GOOGLE_OAUTH_REFRESH_TOKEN. After this, uploads are fully unattended —
-   the refresh token doesn't expire under normal use.
-
-`google-api-python-client` is a blocking/synchronous client, not asyncio —
-`upload_recording` must be awaited via `asyncio.to_thread(...)` from async
-call sites (see app/pipeline/recording.py).
+`google-api-python-client` is blocking, not asyncio — `upload_recording`
+must be awaited via `asyncio.to_thread(...)` from call sites.
 """
 
 from __future__ import annotations

@@ -1,12 +1,8 @@
 """Builds a human-readable transcript from the LLM context, and a short
 post-call summary via a one-off LLM completion.
 
-This is deliberately separate from logInteraction's per-topic rows, not a
-replacement for them — those stay real-time specifically because callers
-hang up abruptly and an "at the end" log would lose data when that happens.
-This transcript/summary IS built at call-end (see run_bot's
-on_client_disconnected), but it's a supplementary record for the admin page
-and owner review, not the thing anything else depends on for correctness.
+Separate from logInteraction's per-topic rows, which stay real-time since
+callers hang up abruptly. This is a supplementary record for admin/owner review.
 """
 
 from __future__ import annotations
@@ -40,14 +36,9 @@ def _message_text(content: Any) -> str:
 
 def build_transcript(context: LLMContext, bot_name: str) -> str:
     """Render user/assistant turns as "Caller:"/"{bot_name}:" lines. Skips
-    developer (our own logging-enforcer nudges) and tool-result messages —
-    those aren't part of what was actually said on the call.
-
-    bot_name is a required parameter, not read from ACTIVE_RESTAURANT
-    directly, so this stays testable/reusable independent of which
-    restaurant is active — the hardcoded "Meera" this replaced mislabeled
-    every restaurant except Spice Route Kitchen (confirmed live: this
-    environment runs Zero40's "Riya").
+    developer nudges and tool-result messages. bot_name is a required
+    parameter rather than read from ACTIVE_RESTAURANT, so this stays
+    reusable across restaurants.
     """
     lines: list[str] = []
     for msg in context.messages:

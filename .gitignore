@@ -20,6 +20,7 @@ htmlcov/
 *.log
 eval_scenarios/eval-runs/
 tts_notes.txt
+docs_live.txt
 
 # Editor / OS
 .vscode/

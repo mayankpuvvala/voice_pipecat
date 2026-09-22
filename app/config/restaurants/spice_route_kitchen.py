@@ -1,13 +1,9 @@
 """Facts + system prompt for Spice Route Kitchen.
 
-Originally ported 1:1 from ../../../../restaurant_voice_bot/vapi_assistant.json;
-since diverged in a few places based on real-call testing (see git history) —
-notably rule 2's reservation flow, rewritten to ask one thing at a time
-instead of stacking name/guests/time into a single question, after a live
-test call came back sounding like a form being read aloud rather than a
-conversation. `app/pipeline/prompts.py` appends further instructions
-(language, brevity, current time, the reservation-tool gate, logging) on top
-of this; nothing here should need editing to add those.
+Originally ported from a Vapi assistant config; since diverged based on
+real-call testing (see git history) — notably the reservation flow, now
+asking one thing at a time instead of stacking questions. prompts.py
+appends further instructions on top of this.
 """
 
 from __future__ import annotations
@@ -97,4 +93,7 @@ Rules:
 - Never mention tool names, JSON, or "the system" to the caller.
 """,
     topic_facts=(_MENU_TOPIC,),
+    # Not set — placeholder client, no real owner number to text. See
+    # Restaurant.owner_phone's docstring before setting this for a real client.
+    owner_phone="",
 )

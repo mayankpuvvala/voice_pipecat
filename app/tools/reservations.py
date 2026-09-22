@@ -1,17 +1,8 @@
 """check_availability / book_table: the two time-critical reservation tools.
 
-Both call Google Sheets directly (see sheets_client's docstring for why,
-not n8n) and independently re-validate kitchen hours in code rather than
-trust the LLM's date math — same "structurally enforce it" pattern as
-LogInteractionEnforcer, here for "never book outside hours" instead of
-"never skip logging."
-
-No seat/order cap is enforced yet, by design — any request inside
-operating hours is bookable. check_availability only checks hours; it
-used to also read the whole Bookings sheet for a same-day count nothing
-consumed (no prompt instruction, no eval scenario ever used it) — pure
-latency for an answer that never changed, so that read was removed.
-Reintroduce it only once there's an actual capacity check to base it on.
+Both call Google Sheets directly (see sheets_client's docstring) and
+re-validate kitchen hours in code rather than trust the LLM's date math.
+No seat/order cap is enforced yet — any request inside hours is bookable.
 """
 
 from __future__ import annotations
@@ -34,14 +25,10 @@ _BOOKINGS_SHEET = "Bookings"
 def _confirmed_since_last_availability_check(context: LLMContext) -> bool:
     """Whether the caller has spoken since the most recent successful check_availability.
 
-    Structural backup for the prompt's read-back-and-confirm instruction --
-    confirmed live that prompt wording alone isn't reliable here: a caller
-    said "8 PM," STT transcribed it as "at ATM," and the model booked a
-    guessed time without giving the caller a chance to catch it. A caller's
-    own reply is the only real evidence they heard the read-back, so this
-    checks for a "user" message after the last successful check_availability
-    -- not just that the model said something, which it might do without
-    waiting for a reply.
+    Structural backup for the prompt's read-back-and-confirm instruction —
+    prompt wording alone let a mistranscribed time get booked without the
+    caller getting a chance to catch it. Requires an actual "user" message
+    after the check, not just the model claiming it read the details back.
     """
     messages = context.messages
     tool_call_names: dict[str, str] = {}
@@ -69,12 +56,8 @@ def _confirmed_since_last_availability_check(context: LLMContext) -> bool:
 def book_table_succeeded_this_call(context: LLMContext) -> bool:
     """Whether book_table has returned booked: true anywhere in this call.
 
-    Not underscore-prefixed -- imported by end_call.py's own guard against a
-    fabricated booking confirmation: confirmed live that a model refused by
-    end_call's spoken-confirmation gate can respond by narrating "you're
-    all set" without ever calling book_table. Same scanning approach as
-    _confirmed_since_last_availability_check above, just checking for the
-    tool's own success signal instead.
+    Not underscore-prefixed — imported by end_call.py's own guard against
+    a model narrating "you're all set" without ever calling book_table.
     """
     messages = context.messages
     tool_call_names: dict[str, str] = {}

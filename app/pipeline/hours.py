@@ -1,10 +1,7 @@
 """Deterministic kitchen-hours validation, used by the reservation tools.
 
 Checked in code rather than trusted to the LLM's own date/time reasoning —
-same "structurally enforce it, don't just rely on the model getting it
-right" approach as LogInteractionEnforcer. A rule this concrete (does 9 PM
-fall inside the 7-11 PM block?) shouldn't depend on the model's arithmetic
-being correct on every single call.
+a rule this concrete shouldn't depend on the model's arithmetic.
 """
 
 from __future__ import annotations
@@ -18,19 +15,10 @@ _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 
 
 def is_within_hours(restaurant: Restaurant, date_str: str, time_str: str) -> tuple[bool, str]:
-    """Check whether `date_str` (YYYY-MM-DD) + `time_str` (24-hour HH:MM) falls
-    inside one of the restaurant's open blocks for that day of the week.
-
-    Returns (True, "") if bookable, else (False, reason).
-
-    Deliberately doesn't compare the requested *time* against the current
-    time of day — a 3 AM call asking for 9 PM that same day is normal;
-    "already passed" doesn't apply to same-day bookings, only "is the
-    kitchen open then." It does reject a requested *date* already in the
-    past (yesterday or earlier) — nothing stops a confused model or a
-    literal past date ("last Tuesday") from reaching here otherwise, and
-    unlike same-day, there's no legitimate reason to want an already-elapsed
-    date.
+    """Check whether `date_str` (YYYY-MM-DD) + `time_str` (24-hour HH:MM)
+    falls inside one of the restaurant's open blocks that day.
+    Returns (True, "") if bookable, else (False, reason). Rejects a past
+    date, but not a same-day time already "passed" today.
     """
     try:
         date = datetime.strptime(date_str, "%Y-%m-%d").date()

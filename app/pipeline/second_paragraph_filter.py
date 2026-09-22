@@ -1,28 +1,11 @@
 """Drops narrated logging/tool-call text from a reply without eating the rest.
 
-The prompt-only instruction not to narrate logInteraction
-(_LOGGING_TIMING_INSTRUCTION in prompts.py) doesn't reliably hold -- confirmed
-live in both code-shaped ("logInteraction({...});") and plain-English ("I'll
-log that for you.") forms reaching real TTS audio.
-
-An earlier version dropped everything after a round's first "\n\n", on the
-theory that no legitimate reply needs a real paragraph break. That was
-wrong, confirmed live: a caller asked about the beer list, and the
-legitimate multi-paragraph, bulleted answer that followed the first break
-got silently dropped along with the trailing narration -- almost nothing
-reached TTS. A menu question is exactly the kind of thing that legitimately
-produces multiple paragraphs.
-
-So each "\n\n"-separated paragraph is now evaluated on its own merits: a
-paragraph is dropped only if it looks like narrated tool-call syntax or a
-plain-English logging mention; every other paragraph -- bulleted lists
-included -- is forwarded. The common case (no "\n\n" at all) streams
-through with no added delay; only once a break appears does the rest of the
-round get buffered and forwarded paragraph-by-paragraph as each completes.
-
-Sits after LogInteractionEnforcer -- that processor needs the raw LLM frame
-stream directly (see its own docstring); this filter only needs whatever
-text it already decided to let through.
+The prompt-only instruction not to narrate logInteraction doesn't
+reliably hold. Each "\n\n"-separated paragraph is evaluated on its own
+merits and dropped only if it looks like tool-call syntax or a
+plain-English logging mention — an earlier version dropped everything
+after the first break, which silently ate legitimate multi-paragraph
+answers too. Sits after LogInteractionEnforcer.
 """
 
 from __future__ import annotations
@@ -41,11 +24,8 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 _CODE_SHAPED = re.compile(r"\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[a-z][a-z0-9]*_[A-Za-z0-9_]+)\(")
 
-# Two shapes confirmed live, neither caught by a plain first-person-verb
-# match: a filler word splitting the verb phrase ("I'll just log our
-# conversation"), and a gerund/label narration with no leading pronoun at
-# all ("Logging interaction: topic ..., resolved true, ...") -- the second
-# alternative below exists for that leading-pronoun-free case.
+# Second alternative catches pronoun-free narration like
+# "Logging interaction: topic ..., resolved true, ...".
 _NARRATES_LOGGING = re.compile(
     r"\b(i'?ll|let me|going to|i'm going to)\s+"
     r"(go ahead and\s+|just\s+)*"
@@ -54,12 +34,8 @@ _NARRATES_LOGGING = re.compile(
     re.IGNORECASE,
 )
 
-# Two more narration shapes confirmed live (verified against actual TTS
-# audio, not just raw text): template-brace syntax ("{{ \n\nlog_interaction}}",
-# with the stray "\n\n" splitting it across paragraphs) and raw single-brace
-# JSON tool args ('{"topic":"...",...}'). Rather than matching either
-# specific shape, just flag any "{" or "}" -- normal spoken prose never
-# contains a literal brace, so this is broader and catches both at once.
+# Flags any "{" or "}" rather than matching specific tool-call/JSON shapes —
+# normal spoken prose never contains a literal brace.
 _BRACE_NARRATION = re.compile(r"[{}]")
 
 

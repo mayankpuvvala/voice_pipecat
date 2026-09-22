@@ -1,26 +1,10 @@
-"""Keeps the system prompt limited to topics the caller has actually raised.
+"""Keeps the system prompt limited to topics the caller has actually
+raised (see Restaurant.topic_facts), to save tokens and latency on turns
+that never touch menu/membership/seating facts.
 
-A plain reservation call ("table for 4 Saturday 8pm") never touches the
-menu, membership perks, seating/ambience, or any of a restaurant's other
-optional facts — see app/config/restaurants/__init__.py's `TopicFacts` and
-each restaurant's `topic_facts`. Shipping all of that on every single turn
-regardless of what the call is actually about is pure wasted prompt tokens:
-fewer input tokens per turn (cost), a shorter prompt to prefill (latency),
-and less unrelated text for the model to weigh when deciding how to answer
-the caller's actual question.
-
-This is deliberately NOT retrieval-augmented generation — no embeddings, no
-vector search, no extra LLM/network round trip (which would cost more
-latency than it saves). It's a plain keyword match against the caller's own
-words, run in-process against text already in memory. A missed keyword just
-means that topic's facts stay out of the prompt; the base prompt's own rule
-("if you don't know, don't guess — take a message") already covers that
-gracefully, same as it would if the fact genuinely didn't exist.
-
-Cumulative for the life of the call, never removes a topic once matched —
-a caller might ask a follow-up about "it" a few turns after first
-mentioning "the menu" without repeating the keyword, and dropping context
-they were already given would be worse than the extra tokens of keeping it.
+Plain in-process keyword matching, not RAG — no embeddings or extra round
+trip. Cumulative for the call; never removes a topic once matched, since a
+later follow-up might not repeat the keyword.
 """
 
 from __future__ import annotations

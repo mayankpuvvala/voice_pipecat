@@ -1,16 +1,11 @@
 """Cloudflare R2 uploads for call recordings.
 
-Replaces an earlier Google Drive-based approach that turned out to be a dead
-end: Google removed storage quota for service accounts in 2021, so a service
-account can never own a file in a regular (non-Shared-Drive) Google Drive no
-matter what permissions a folder grants it — confirmed live, via
-`storageQuotaExceeded` on an actual upload attempt, not just docs. R2 is
-plain S3-compatible object storage with no such per-identity quota model —
-an API token scoped to the bucket is all that's needed.
+Replaces an earlier Google Drive approach — service accounts have had
+zero Drive storage quota since 2021. R2 is plain S3-compatible storage
+with no such quota model.
 
-`boto3` is a blocking/synchronous client, not asyncio — `upload_recording`
-must be awaited via `asyncio.to_thread(...)` from async call sites (see
-app/pipeline/recording.py).
+`boto3` is blocking, not asyncio — `upload_recording` must be awaited via
+`asyncio.to_thread(...)` from call sites.
 """
 
 from __future__ import annotations

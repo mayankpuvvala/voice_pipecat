@@ -1,20 +1,11 @@
 """Saves each call's full audio, transcript, and summary to the Recordings sheet.
 
-Uses app.services.drive_oauth_client (uploads as an actual human Google
-account via OAuth) as the near-term recording backend — app.services.r2_client
-(Cloudflare R2) is the intended longer-term one, parked until R2 is actually
-activated on the Cloudflare account; swap the import below once it is.
+Uses drive_oauth_client as the near-term backend — r2_client (Cloudflare
+R2) is the intended longer-term one, parked until R2 is activated.
 
-Wired to AudioBufferProcessor's on_audio_data (see app/main.py), which fires
-once per call with the complete merged audio, right at call-end. Awaited
-rather than fire-and-forgotten: the added teardown delay happens after all
-audio already reached the caller, so it's invisible to them, and guarantees
-the recording saves before the worker is considered stopped instead of
-risking a mid-upload cutoff.
-
-Audio upload, summary generation, and the sheet write are independent best
-efforts — a failure in one (e.g. the recording upload) doesn't prevent the
-others (transcript/summary) from still being saved.
+Wired to AudioBufferProcessor's on_audio_data, awaited so the recording
+saves before the worker stops. Upload, summary, and sheet write are each
+independent best efforts.
 """
 
 from __future__ import annotations

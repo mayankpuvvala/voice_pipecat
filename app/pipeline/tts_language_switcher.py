@@ -1,25 +1,10 @@
-"""Keeps Sarvam TTS's synthesis locale in sync with whatever language the
-bot's own reply is actually written in, instead of a locale fixed for the
-whole call.
+"""Keeps Sarvam TTS's synthesis locale in sync with the bot reply's actual
+language, instead of a locale fixed for the whole call.
 
-`_build_tts()` in app/main.py used to hardcode `language=Language.HI_IN` for
-every reply, for the entire call. Sarvam's `target_language_code` governs
-pronunciation, not just which script it can read -- confirmed live: plain
-English replies ("That's a table for 3...") came out with guest counts and
-other numbers/words spoken with Hindi phonetics, even though the text itself
-was English and the caller never used a word of Hindi. `_LANGUAGE_INSTRUCTION`
-in prompts.py already tells the model to default to English and only reply in
-Hindi once the caller genuinely speaks a full Hindi sentence -- this processor
-just makes the TTS locale follow that same already-correct decision, per
-reply, instead of staying pinned to one language for the whole call.
-
-Sits right after SecondParagraphFilter (so it sees exactly the final text
-that will actually reach the caller, with any narrated tool-call text already
-dropped) and before `tts`. Decided once per response from the first
-non-empty text chunk -- these replies are short (one sentence, per the
-brevity instruction), so a reply's opening words reliably indicate its
-language; deciding per-chunk instead would risk flapping the locale
-mid-utterance on an English word/number inside an otherwise-Hindi reply.
+Sarvam's `target_language_code` governs pronunciation, not just script —
+a hardcoded Hindi locale made plain English replies come out with Hindi
+phonetics. Sits after SecondParagraphFilter, before `tts`; decided once
+per response from the first non-empty text chunk.
 """
 
 from __future__ import annotations
@@ -37,9 +22,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transcriptions.language import Language
 
-# Hindi (and other Indic scripts this call's STT can produce, Devanagari
-# specifically since that's all Hindi ever transcribes as) -- plain Latin-
-# script English/Hinglish text never matches this.
+# Devanagari script — plain Latin-script English/Hinglish never matches this.
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 
 

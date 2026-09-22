@@ -1,24 +1,11 @@
 """Turns a total, unrecoverable provider failure mid-call into a clean,
-honest ending instead of dead air the caller sits through until the
-telephony provider's own timeout finally hangs up on them.
+honest ending instead of dead air until the telephony provider times out.
+Last resort after STT/LLM/TTS each exhaust their own retries/fallbacks.
 
-STT, LLM, and TTS each retry/fall back on their own first — see
-resilient_stt.py's connect retries, rumik_tts.py's Rumik→OpenAI fallback,
-and main.py's `retry_on_timeout=True` on OpenAILLMService. By the time any
-of them calls into a CallHealthMonitor, its own retries are exhausted —
-this is the last resort, not the first line of defense.
-
-Two endings, depending on whether TTS itself is the thing that died:
-
-- `degrade_with_apology`: STT or LLM failed but TTS is presumed to still
-  work, so speak a short apology and hang up — the caller gets *something*
-  instead of silence.
-- `degrade_silently`: TTS itself exhausted every provider it has, so there
-  is nothing left to speak with; just end the call.
-
-Either way this logs at CRITICAL with a fixed, greppable prefix
-(CALL_HEALTH_DEVELOPER_ALERT) meant to get someone's attention, not blend
-into normal logs. See TROUBLESHOOTING.md.
+`degrade_with_apology` speaks a short apology then hangs up (TTS presumed
+alive); `degrade_silently` just ends the call (TTS itself is dead). Both
+log at CRITICAL and fire an SMS via OPS_ALERT_PHONE if configured — see
+TROUBLESHOOTING.md.
 """
 
 from __future__ import annotations
@@ -27,13 +14,15 @@ from loguru import logger
 
 from pipecat.frames.frames import EndWorkerFrame, TTSSpeakFrame
 
+from app.config.settings import settings
+from app.services.twilio_client import send_sms
+
 
 class CallHealthMonitor:
     """One instance per call — see app/main.py's `run_bot`."""
 
-    # A single LLM failure already means its own retries were exhausted for
-    # that turn — but one failed turn is still cheap to let the caller
-    # repeat, so this waits for a second before deciding the LLM is down.
+    # One failed turn is cheap to let the caller repeat; wait for a second
+    # before deciding the LLM is actually down.
     _LLM_FAILURE_THRESHOLD = 2
 
     def __init__(
@@ -49,6 +38,7 @@ class CallHealthMonitor:
         self._capture_transcript = capture_transcript
         self._call_session_id = call_session_id
         self._caller_phone = caller_phone
+        self._restaurant_name = restaurant_name
         self._apology_text = (
             f"I'm really sorry, we're having a technical issue on our end right now. "
             f"Please try calling {restaurant_name} back in a few minutes. "
@@ -103,6 +93,14 @@ class CallHealthMonitor:
             speak_apology,
             detail,
         )
+
+        if settings.ops_alert_phone:
+            sent = await send_sms(
+                settings.ops_alert_phone,
+                f"[{self._restaurant_name}] Live call degraded (stage={stage}) and is "
+                f"being ended. call_session_id={self._call_session_id} detail={detail}",
+            )
+            logger.info("Ops alert SMS for degraded call {}: sent={}", self._call_session_id, sent)
 
         # on_client_disconnected only fires for a caller-initiated close (same
         # reason end_call.py captures it explicitly instead) — this is a
