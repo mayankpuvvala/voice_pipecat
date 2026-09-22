@@ -7,11 +7,15 @@ topics collapsed into a small set of derived category badges.
 
 from __future__ import annotations
 
+import asyncio
+import io
+import wave
 from datetime import datetime
 from html import escape
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
@@ -24,6 +28,167 @@ from app.pipeline.logging_enforcer import LOG_INTERACTION_STATS
 from app.services import drive_oauth_client
 
 _IST = ZoneInfo("Asia/Kolkata")
+
+_PROBE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "_health_probe_tool",
+            "description": "Call this immediately, regardless of what the user said.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+]
+
+
+async def _openai_chat_completion(client: Any, **kwargs: Any) -> Any:
+    """Tries with reasoning_effort='none' first, retries without it if this
+    account/model rejects the argument outright -- same account-dependent
+    behavior app/main.py's own startup probe exists to handle (see
+    TROUBLESHOOTING.md), replicated locally rather than importing
+    app.main's private probe result (app.main imports this module, so the
+    reverse import would be circular)."""
+    try:
+        return await client.chat.completions.create(reasoning_effort="none", **kwargs)
+    except Exception as e:
+        if "Unrecognized request argument supplied: reasoning_effort" in str(e):
+            return await client.chat.completions.create(**kwargs)
+        raise
+
+
+async def _check_llm() -> dict[str, Any]:
+    """Tiny real completion (not just a key-presence check) -- confirms the
+    configured OPENAI_API_KEY/OPENAI_MODEL actually resolves and responds
+    on this deployment specifically."""
+    if not settings.openai_api_key:
+        return {"ok": False, "error": "OPENAI_API_KEY not set"}
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    try:
+        resp = await _openai_chat_completion(
+            client,
+            model=settings.openai_model,
+            messages=[{"role": "user", "content": "Reply with exactly one word: ok"}],
+            max_completion_tokens=5,
+        )
+        return {"ok": True, "model": settings.openai_model, "reply": resp.choices[0].message.content}
+    except Exception as e:
+        return {"ok": False, "model": settings.openai_model, "error": f"{type(e).__name__}: {e}"}
+
+
+async def _check_tool_calling() -> dict[str, Any]:
+    """Confirms the model actually EMITS a tool call when given one and
+    told to use it -- not just that a tools= request doesn't error (that
+    alone doesn't prove the model will call log_interaction/check_availability/
+    book_table on a real call; see TROUBLESHOOTING.md's logInteraction
+    reliability finding for why this distinction mattered before)."""
+    if not settings.openai_api_key:
+        return {"ok": False, "error": "OPENAI_API_KEY not set"}
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    try:
+        resp = await _openai_chat_completion(
+            client,
+            model=settings.openai_model,
+            messages=[{"role": "user", "content": "call the tool now"}],
+            tools=_PROBE_TOOLS,
+            tool_choice="required",
+            max_completion_tokens=50,
+        )
+        tool_calls = resp.choices[0].message.tool_calls or []
+        called = any(tc.function.name == "_health_probe_tool" for tc in tool_calls)
+        return {"ok": called, "tool_calls_returned": len(tool_calls)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _silent_wav_bytes(duration_secs: float = 0.3, sample_rate: int = 16000) -> bytes:
+    """A tiny valid WAV file (silence) for the STT connectivity check below
+    -- proves the API key/account works and the service actually responds,
+    not that transcription quality is good. Silence transcribing to empty
+    text is the correct, expected result here."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(sample_rate)
+        f.writeframes(b"\x00\x00" * int(sample_rate * duration_secs))
+    return buf.getvalue()
+
+
+async def _check_stt() -> dict[str, Any]:
+    """Sarvam's batch REST transcribe endpoint, not the WebSocket stream
+    ResilientSarvamSTTService actually uses on live calls (see
+    app/services/resilient_stt.py) -- that's connection-oriented and needs
+    a running pipeline context to exercise meaningfully. The batch endpoint
+    shares the same API key/account, so it validates auth + reachability
+    without standing up a fake call."""
+    if not settings.sarvam_api_key:
+        return {"ok": False, "error": "SARVAM_API_KEY not set"}
+    from sarvamai import AsyncSarvamAI
+
+    client = AsyncSarvamAI(api_subscription_key=settings.sarvam_api_key)
+    try:
+        resp = await client.speech_to_text.transcribe(
+            file=("health.wav", _silent_wav_bytes(), "audio/wav"),
+            model="saarika:v2.5",
+        )
+        return {"ok": True, "transcript": getattr(resp, "transcript", None)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+async def _check_tts() -> dict[str, Any]:
+    """Both TTS providers this deployment actually uses, in priority order
+    (see app/services/rumik_tts.py's docstring): Rumik primary, OpenAI as
+    the in-call fallback. Each does a real tiny synthesis, not just a key
+    check."""
+    results: dict[str, dict[str, Any]] = {}
+
+    if settings.rumik_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    "https://silk-api.rumik.ai/v1/tts",
+                    headers={"Authorization": f"Bearer {settings.rumik_api_key}"},
+                    json={
+                        "model": "mulberry",
+                        "text": "test",
+                        "speaker": "lucas",
+                        "description": "neutral, brief",
+                    },
+                )
+            results["rumik"] = (
+                {"ok": True, "bytes": len(resp.content)}
+                if resp.status_code == 200
+                else {"ok": False, "status": resp.status_code, "error": resp.text[:200]}
+            )
+        except Exception as e:
+            results["rumik"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    else:
+        results["rumik"] = {"ok": False, "error": "RUMIK_API_KEY not set"}
+
+    if settings.openai_api_key:
+        try:
+            from openai import AsyncOpenAI
+
+            oai = AsyncOpenAI(api_key=settings.openai_api_key)
+            async with oai.audio.speech.with_streaming_response.create(
+                model="tts-1",
+                voice=settings.openai_tts_voice,
+                input="test",
+                response_format="pcm",
+            ) as resp:
+                nbytes = sum([len(chunk) async for chunk in resp.iter_bytes()])
+            results["openai_fallback"] = {"ok": nbytes > 0, "bytes": nbytes}
+        except Exception as e:
+            results["openai_fallback"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    else:
+        results["openai_fallback"] = {"ok": False, "error": "OPENAI_API_KEY not set"}
+
+    return results
 
 _TOPIC_CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
     ("Reservation", ("reserv", "book", "table")),
@@ -186,7 +351,13 @@ def register_admin_routes(app: FastAPI) -> None:
         TROUBLESHOOTING.md's reasoning_effort incident), so a passing local
         test proves nothing about prod. Actually exercises the Drive upload
         credential path (read-only: refresh + folder lookup, no file
-        written) rather than just checking a key is *present*.
+        written), plus the LLM, tool-calling, STT, and TTS paths, rather
+        than just checking that keys are *present*.
+
+        Every call to this endpoint makes real, billed requests to OpenAI,
+        Sarvam, and Rumik (a handful of tiny completions/syntheses each
+        time) — admin-gated for that reason, don't put it behind automated
+        polling.
         """
         drive_ok = True
         drive_error: str | None = None
@@ -197,6 +368,10 @@ def register_admin_routes(app: FastAPI) -> None:
             drive_ok = False
             drive_error = f"{type(e).__name__}: {e}"
             logger.exception("admin_health: Drive credential check failed")
+
+        llm_result, tool_calling_result, stt_result, tts_result = await asyncio.gather(
+            _check_llm(), _check_tool_calling(), _check_stt(), _check_tts()
+        )
 
         total = LOG_INTERACTION_STATS["inline"] + LOG_INTERACTION_STATS["backfilled"]
         inline_rate = (LOG_INTERACTION_STATS["inline"] / total) if total else None
@@ -210,6 +385,10 @@ def register_admin_routes(app: FastAPI) -> None:
                     "ok": drive_ok,
                     "error": drive_error,
                 },
+                "llm": llm_result,
+                "tool_calling": tool_calling_result,
+                "stt": stt_result,
+                "tts": tts_result,
                 "log_interaction_stats": {
                     **LOG_INTERACTION_STATS,
                     "inline_rate": inline_rate,
