@@ -25,6 +25,7 @@ _FONT_LINKS = """
 _STYLE = """
 :root {
   --paper: #f4f2ec;
+  --on-dark: #f4f2ec;
   --surface: #ffffff;
   --surface-2: #faf9f5;
   --ink: #221f1a;
@@ -78,7 +79,7 @@ h1, h2, h3 { font-family: "Fraunces", Georgia, serif; font-weight: 600; text-wra
 .muted { color: var(--muted); font-size: 0.78rem; }
 .nowrap { white-space: nowrap; }
 
-.topbar { background: var(--ink); color: var(--paper); }
+.topbar { background: var(--ink); color: var(--on-dark); }
 @media (prefers-color-scheme: dark) { .topbar { background: #0f0d0b; } }
 .topbar-inner { max-width: 1240px; margin: 0 auto; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .brand { display: flex; align-items: baseline; gap: 10px; }
