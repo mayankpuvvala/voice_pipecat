@@ -49,10 +49,14 @@ tr:hover td { background: #fbfbfd; }
 .topic-filter-chip[hidden] { display: none; }
 .cap-bar-track { background: #e5e7eb; border-radius: 999px; height: 10px; width: 100%; max-width: 320px; overflow: hidden; }
 .cap-bar-fill { height: 100%; border-radius: 999px; }
+.charts-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 20px; }
+.chart-col { flex: 0 1 auto; min-width: 0; }
+.chart-col h3 { margin-top: 0; }
 .hour-chart { display: flex; align-items: flex-end; gap: 3px; height: 160px; max-width: 640px; padding-top: 18px; overflow-x: auto; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.day-chart { max-width: 280px; }
 .hour-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; flex: 1 0 20px; height: 100%; }
 .hour-col-count { font-size: 0.65rem; color: var(--text-muted); height: 14px; }
-.hour-col-bar { width: 100%; min-height: 1px; background: #6366f1; border-radius: 3px 3px 0 0; }
+.hour-col-bar { width: 8px; min-height: 4px; background: #6366f1; border-radius: 999px; }
 .hour-col-label { font-size: 0.65rem; color: var(--text-muted); margin-top: 4px; }
 .restaurant-links a { display: inline-block; margin-right: 14px; font-weight: 600; }
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 12px 16px; margin-bottom: 1.25rem; font-size: 0.85rem; }
@@ -281,6 +285,24 @@ def render_hour_chart(hour_counts: list[int]) -> str:
     return f'<div class="hour-chart">{cols}</div>'
 
 
+_DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def render_day_chart(day_counts: list[int]) -> str:
+    if not any(day_counts):
+        return '<p class="muted">No call-time data yet.</p>'
+    peak = max(day_counts) or 1
+    cols = "".join(
+        f'<div class="hour-col" title="{_DAY_LABELS[d]} &middot; {count} call(s)">'
+        f'<span class="hour-col-count">{count or ""}</span>'
+        f'<div class="hour-col-bar" style="height:{(count / peak) * 100:.0f}%"></div>'
+        f'<span class="hour-col-label">{_DAY_LABELS[d]}</span>'
+        f'</div>'
+        for d, count in enumerate(day_counts)
+    )
+    return f'<div class="hour-chart day-chart">{cols}</div>'
+
+
 def render_call_row(call: dict[str, Any]) -> str:
     date_str, time_str, iso_date = _format_datetime(call["timestamp"])
     duration_str = _format_duration(call.get("duration_secs"))
@@ -343,8 +365,13 @@ _FILTER_BAR = """
   </div>
   <div class="filter-group">
     <span class="filter-label">Outcome</span>
-    <label><input type="checkbox" class="f-outcome" value="resolved" checked> Resolved</label>
-    <label><input type="checkbox" class="f-outcome" value="followup" checked> Follow-up needed</label>
+    <div class="dropdown-multiselect" id="outcome-dropdown">
+      <button type="button" class="dropdown-toggle" id="outcome-toggle">All <span class="dropdown-arrow">&#9662;</span></button>
+      <div class="dropdown-panel" id="outcome-panel" hidden>
+        <label><input type="checkbox" class="f-outcome" value="resolved" checked> Resolved</label>
+        <label><input type="checkbox" class="f-outcome" value="followup" checked> Follow-up needed</label>
+      </div>
+    </div>
   </div>
   <div class="filter-group">
     <span class="filter-label">Confidence</span>
@@ -360,8 +387,13 @@ _FILTER_BAR = """
   </div>
   <div class="filter-group">
     <span class="filter-label">Escalation</span>
-    <label><input type="checkbox" class="f-escalation" value="yes" checked> Escalated</label>
-    <label><input type="checkbox" class="f-escalation" value="no" checked> Not escalated</label>
+    <div class="dropdown-multiselect" id="escalation-dropdown">
+      <button type="button" class="dropdown-toggle" id="escalation-toggle">All <span class="dropdown-arrow">&#9662;</span></button>
+      <div class="dropdown-panel" id="escalation-panel" hidden>
+        <label><input type="checkbox" class="f-escalation" value="yes" checked> Escalated</label>
+        <label><input type="checkbox" class="f-escalation" value="no" checked> Not escalated</label>
+      </div>
+    </div>
   </div>
   <div class="filter-group">
     <label>Sort by
@@ -429,40 +461,47 @@ _FILTER_SCRIPT = """
     });
   }
 
-  var confidenceDropdown = document.getElementById('confidence-dropdown');
-  var confidenceToggle = document.getElementById('confidence-toggle');
-  var confidencePanel = document.getElementById('confidence-panel');
-  var confidenceLabels = {'1': 'High', '2': 'Medium', '3': 'Low', '0': 'Unrated'};
-  var confidenceOrder = ['1', '2', '3', '0'];
+  function initMultiSelect(name, labels, order) {
+    var dropdown = document.getElementById(name + '-dropdown');
+    var toggle = document.getElementById(name + '-toggle');
+    var panel = document.getElementById(name + '-panel');
+    var selector = '.f-' + name;
 
-  function updateConfidenceLabel() {
-    var selected = checkedValues('.f-confidence');
-    var text;
-    if (selected.length === 0) {
-      text = 'None';
-    } else if (selected.length === confidenceOrder.length) {
-      text = 'All';
-    } else {
-      text = confidenceOrder
-        .filter(function(v) { return selected.indexOf(v) !== -1; })
-        .map(function(v) { return confidenceLabels[v]; })
-        .join(', ');
+    function updateLabel() {
+      var selected = checkedValues(selector);
+      var text;
+      if (selected.length === 0) {
+        text = 'None';
+      } else if (selected.length === order.length) {
+        text = 'All';
+      } else {
+        text = order
+          .filter(function(v) { return selected.indexOf(v) !== -1; })
+          .map(function(v) { return labels[v]; })
+          .join(', ');
+      }
+      toggle.firstChild.textContent = text + ' ';
     }
-    confidenceToggle.firstChild.textContent = text + ' ';
+
+    toggle.addEventListener('click', function(e) {
+      e.stopPropagation();
+      panel.hidden = !panel.hidden;
+    });
+    document.addEventListener('click', function(e) {
+      if (!panel.hidden && !dropdown.contains(e.target)) {
+        panel.hidden = true;
+      }
+    });
+    document.querySelectorAll(selector).forEach(function(el) {
+      el.addEventListener('change', updateLabel);
+    });
+
+    return updateLabel;
   }
 
-  confidenceToggle.addEventListener('click', function(e) {
-    e.stopPropagation();
-    confidencePanel.hidden = !confidencePanel.hidden;
-  });
-  document.addEventListener('click', function(e) {
-    if (!confidencePanel.hidden && !confidenceDropdown.contains(e.target)) {
-      confidencePanel.hidden = true;
-    }
-  });
-  document.querySelectorAll('.f-confidence').forEach(function(el) {
-    el.addEventListener('change', updateConfidenceLabel);
-  });
+  var updateOutcomeLabel = initMultiSelect('outcome', {resolved: 'Resolved', followup: 'Follow-up needed'}, ['resolved', 'followup']);
+  var updateConfidenceLabel = initMultiSelect('confidence', {'1': 'High', '2': 'Medium', '3': 'Low', '0': 'Unrated'}, ['1', '2', '3', '0']);
+  var updateEscalationLabel = initMultiSelect('escalation', {yes: 'Escalated', no: 'Not escalated'}, ['yes', 'no']);
 
   function computeMatches() {
     var from = fromEl.value;
@@ -609,7 +648,9 @@ _FILTER_SCRIPT = """
     toEl.value = '';
     presetEl.value = 'all';
     document.querySelectorAll('.f-outcome, .f-confidence, .f-escalation').forEach(function(el) { el.checked = true; });
+    updateOutcomeLabel();
     updateConfidenceLabel();
+    updateEscalationLabel();
     sortEl.value = 'newest';
     setTopic(null);
   });
@@ -631,6 +672,7 @@ _FILTER_SCRIPT = """
       presetEl.value = 'custom';
       setChecked('.f-outcome', ['followup']);
       setChecked('.f-confidence', ['0', '1', '2', '3']);
+      updateOutcomeLabel();
       updateConfidenceLabel();
       applyFilters();
       scrollToTable();
@@ -680,8 +722,16 @@ def render_restaurant_page(
   </div>
   <h3>What callers ask about</h3>
   {render_topic_breakdown(stats["topic_counts"])}
-  <h3>Calls by hour of day (IST)</h3>
-  {render_hour_chart(stats["hour_counts"])}
+  <div class="charts-row">
+    <div class="chart-col">
+      <h3>Calls by hour of day (IST)</h3>
+      {render_hour_chart(stats["hour_counts"])}
+    </div>
+    <div class="chart-col">
+      <h3>Calls by day of week</h3>
+      {render_day_chart(stats["day_counts"])}
+    </div>
+  </div>
   <h3>Call log</h3>
   {render_call_table(calls, stats)}
 """

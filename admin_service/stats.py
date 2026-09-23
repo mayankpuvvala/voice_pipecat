@@ -107,10 +107,12 @@ def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -
             topic_counts[category] = topic_counts.get(category, 0) + 1
 
     hour_counts = [0] * 24
+    day_counts = [0] * 7
     for call in calls:
         dt = _call_local_dt(call)
         if dt:
             hour_counts[dt.hour] += 1
+            day_counts[dt.weekday()] += 1
 
     minutes_used_this_month = sum(month_minutes)
     minutes_remaining_this_month = (
@@ -145,6 +147,7 @@ def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -
         "max_call_minutes": max(all_minutes) if all_minutes else 0.0,
         "topic_counts": dict(sorted(topic_counts.items(), key=lambda kv: kv[1], reverse=True)),
         "hour_counts": hour_counts,
+        "day_counts": day_counts,
         "peak_hour": max(range(24), key=lambda h: hour_counts[h]) if any(hour_counts) else None,
         "quiet_hour_with_calls": (
             min((h for h in range(24) if hour_counts[h] > 0), key=lambda h: hour_counts[h])
