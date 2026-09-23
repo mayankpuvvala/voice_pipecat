@@ -93,6 +93,13 @@ tr:hover td { background: #fbfbfd; }
 .donut-legend-item { display: flex; align-items: center; gap: 8px; }
 .donut-legend-item .count { font-weight: 700; }
 .donut-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.dropdown-multiselect { position: relative; display: inline-block; }
+.dropdown-toggle { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 5px 10px; font-size: 0.85rem; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.dropdown-toggle:hover { background: #f5f6f8; }
+.dropdown-arrow { font-size: 0.7rem; color: var(--text-muted); }
+.dropdown-panel { position: absolute; top: calc(100% + 4px); left: 0; background: #fff; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); padding: 8px 12px; z-index: 20; display: flex; flex-direction: column; gap: 6px; min-width: 140px; }
+.dropdown-panel[hidden] { display: none; }
+.dropdown-panel label { display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; }
 """
 
 _CONFIDENCE_BADGES = {
@@ -341,10 +348,15 @@ _FILTER_BAR = """
   </div>
   <div class="filter-group">
     <span class="filter-label">Confidence</span>
-    <label><input type="checkbox" class="f-confidence" value="1" checked> High</label>
-    <label><input type="checkbox" class="f-confidence" value="2" checked> Medium</label>
-    <label><input type="checkbox" class="f-confidence" value="3" checked> Low</label>
-    <label><input type="checkbox" class="f-confidence" value="0" checked> Unrated</label>
+    <div class="dropdown-multiselect" id="confidence-dropdown">
+      <button type="button" class="dropdown-toggle" id="confidence-toggle">All <span class="dropdown-arrow">&#9662;</span></button>
+      <div class="dropdown-panel" id="confidence-panel" hidden>
+        <label><input type="checkbox" class="f-confidence" value="1" checked> High</label>
+        <label><input type="checkbox" class="f-confidence" value="2" checked> Medium</label>
+        <label><input type="checkbox" class="f-confidence" value="3" checked> Low</label>
+        <label><input type="checkbox" class="f-confidence" value="0" checked> Unrated</label>
+      </div>
+    </div>
   </div>
   <div class="filter-group">
     <span class="filter-label">Escalation</span>
@@ -416,6 +428,41 @@ _FILTER_SCRIPT = """
       el.checked = values.indexOf(el.value) !== -1;
     });
   }
+
+  var confidenceDropdown = document.getElementById('confidence-dropdown');
+  var confidenceToggle = document.getElementById('confidence-toggle');
+  var confidencePanel = document.getElementById('confidence-panel');
+  var confidenceLabels = {'1': 'High', '2': 'Medium', '3': 'Low', '0': 'Unrated'};
+  var confidenceOrder = ['1', '2', '3', '0'];
+
+  function updateConfidenceLabel() {
+    var selected = checkedValues('.f-confidence');
+    var text;
+    if (selected.length === 0) {
+      text = 'None';
+    } else if (selected.length === confidenceOrder.length) {
+      text = 'All';
+    } else {
+      text = confidenceOrder
+        .filter(function(v) { return selected.indexOf(v) !== -1; })
+        .map(function(v) { return confidenceLabels[v]; })
+        .join(', ');
+    }
+    confidenceToggle.firstChild.textContent = text + ' ';
+  }
+
+  confidenceToggle.addEventListener('click', function(e) {
+    e.stopPropagation();
+    confidencePanel.hidden = !confidencePanel.hidden;
+  });
+  document.addEventListener('click', function(e) {
+    if (!confidencePanel.hidden && !confidenceDropdown.contains(e.target)) {
+      confidencePanel.hidden = true;
+    }
+  });
+  document.querySelectorAll('.f-confidence').forEach(function(el) {
+    el.addEventListener('change', updateConfidenceLabel);
+  });
 
   function computeMatches() {
     var from = fromEl.value;
@@ -562,6 +609,7 @@ _FILTER_SCRIPT = """
     toEl.value = '';
     presetEl.value = 'all';
     document.querySelectorAll('.f-outcome, .f-confidence, .f-escalation').forEach(function(el) { el.checked = true; });
+    updateConfidenceLabel();
     sortEl.value = 'newest';
     setTopic(null);
   });
@@ -583,11 +631,13 @@ _FILTER_SCRIPT = """
       presetEl.value = 'custom';
       setChecked('.f-outcome', ['followup']);
       setChecked('.f-confidence', ['0', '1', '2', '3']);
+      updateConfidenceLabel();
       applyFilters();
       scrollToTable();
     });
   }
 
+  updateConfidenceLabel();
   if (rows.length) applyFilters();
 })();
 </script>

@@ -1,4 +1,4 @@
-# Restaurant Voice Agent — Pipecat Prototype Phase
+# Restaurant Voice Agent — Pipecat
 
 Self-owned replacement for the Vapi-based `restaurant_voice_bot` receptionist
 (see `../restaurant_voice_bot/vapi_assistant.json`) — same restaurant facts
@@ -11,16 +11,22 @@ in `n8n/restaurant_reception_workflow.json` is now dead and due for removal).
 
 **Call path**: an existing Jio number forwards unanswered calls into Exotel,
 which opens a bidirectional WebSocket ("Media Streams") straight into this
-server — no Daily, no WebRTC, no XML webhook. Pipecat's FastAPI WebSocket
-transport (`pipecat.transports.websocket.fastapi`) speaks that protocol via
-the `ExotelFrameSerializer`, auto-detected from the connection handshake.
-STT recognizes English, Hindi, and Telugu speech (Sarvam STT auto-detects
-and code-switches), but Telugu is not a supported *reply* language — the
-system prompt (see `_LANGUAGE_INSTRUCTION` in `app/pipeline/prompts.py`)
-deliberately treats an apparent Telugu transcript as a misheard
-English/Hindi/Hinglish utterance rather than switching into it, since this
-call path only supports replying in English or Hindi/Hinglish and TTS is
-English-voice-only for now (see "Deferred" below).
+server — no Daily, no XML webhook for Exotel itself. Pipecat's FastAPI
+WebSocket transport (`pipecat.transports.websocket.fastapi`) speaks that
+protocol via the `ExotelFrameSerializer`, auto-detected from the connection
+handshake. Twilio, Telnyx, Plivo, and Vobiz are also wired (see "Run"
+below) — Vobiz auto-detects as "plivo" on the wire and is routed to its own
+transport builder (`_create_vobiz_transport` in `app/main.py`) since it
+needs `keepCallAlive="false"` behavior Plivo's own serializer doesn't
+provide. STT recognizes English, Hindi, and Telugu speech (Sarvam STT
+auto-detects and code-switches), but Telugu is not a supported *reply*
+language — the system prompt (see `_LANGUAGE_INSTRUCTION` in
+`app/pipeline/prompts.py`) deliberately treats an apparent Telugu transcript
+as a misheard English/Hindi/Hinglish utterance rather than switching into
+it. TTS is Rumik (`mulberry` model, see "TTS & STT" below), which handles
+Hindi/English code-mixed replies natively — no separate voice-matching step
+needed.
+
 One restaurant active per deployment, picked via the `RESTAURANT_ID` env var
 (`app/config/restaurants/`) — currently Spice Route Kitchen and Zero40
 Brewing are configured; add a new client the same way without restructuring.
@@ -34,46 +40,93 @@ pip install -r requirements.txt
 copy .env.example .env          # then fill in the keys below
 ```
 
-Env vars needed in `.env`:
-- `OPENAI_API_KEY` — same key `ai-receptionist` already uses works fine here.
-- `SARVAM_API_KEY` — a Sarvam key already exists in `ai-receptionist/.env`
-  under `SARVAM_API` (different var name, same value) — reuse it or grab a
-  fresh one from the Sarvam dashboard.
-- `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` — used
-  directly by the live-call tools and by `/admin` (see below). Reuses the
-  same service account already granted Editor on the sheet for n8n's own
-  Sheets credential — no separate sharing step needed.
-- `GOOGLE_SHEET_ID` — the spreadsheet ID from the sheet's URL (the string
-  between `/d/` and `/edit`). The spreadsheet needs three tabs, each with
-  just its header row already in place (see "Reservations & logging" below
-  for the exact columns each one needs — `sheets_client.append_row` silently
-  drops any field not in a tab's header row, so a tab missing a column loses
-  that data on every write rather than erroring): `Sheet1` (interaction
-  log), `Bookings` (reservations), and `Recordings` (call recordings/
-  transcripts/summaries — optional at first, `/admin` degrades gracefully
-  if it doesn't exist yet, but recordings won't show up until it does).
-- `ADMIN_USERNAME` / `ADMIN_PASSWORD` — gate for `/admin`. Defaults to
-  `admin`/`admin` to match `ai-receptionist`'s local-dev precedent — **change
-  this** once deployed off localhost, since that default is not meant to
-  survive being on a public URL.
+`.env.example` is the source of truth for every env var this app reads —
+each one has its own comment there explaining what it's for and why. In
+short, at minimum you need:
+
+- `OPENAI_API_KEY` / `OPENAI_MODEL` — the conversational LLM. See
+  TROUBLESHOOTING.md's "Conversational LLM model choice" before changing
+  the model — this isn't an arbitrary pick, it fixes real reliability bugs
+  in older models.
+- `SARVAM_API_KEY` — speech-to-text (STT only now; see "TTS & STT" below).
+- `RUMIK_API_KEY` — text-to-speech.
+- `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` /
+  `GOOGLE_SHEET_ID` — used directly by the live-call tools and by `/admin`.
+  The spreadsheet needs three tabs, each with just its header row already in
+  place (see "Reservations & logging" below for the exact columns — writes
+  silently drop any field not in a tab's header row, so a tab missing a
+  column loses that data rather than erroring): `Sheet1` (interaction log),
+  `Bookings` (reservations), and `Recordings` (call recordings/transcripts/
+  summaries/post-call confidence — optional at first, `/admin` degrades
+  gracefully if it doesn't exist yet).
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` — gate for `/admin` and `/live`.
+  **Rotate off any default before this is reachable on a public URL.**
+
+Everything else in `.env.example` is optional and self-contained: Groq as
+an alternate LLM (off by default, see its own comment for why), Twilio SMS
+escalation alerts, Google Drive OAuth for call recordings (with Cloudflare
+R2 as the parked longer-term backend), Langfuse call tracing, and
+`admin_service/`'s own separate per-restaurant dashboard credentials (that's
+a different deployment — see "Admin" below).
 
 No Exotel-specific env vars are needed: the call/stream identifiers
 (`stream_sid`, `call_sid`) arrive in the WebSocket handshake itself, and
 `create_transport()` reads them off that automatically.
 
+## TTS & STT
+
+- **STT: Sarvam**, streaming WebSocket, `codemix` mode (auto-detects and
+  switches between English/Hindi/Telugu mid-call) — `app/services/
+  resilient_stt.py` wraps it with connect retries.
+- **TTS: Rumik** (`mulberry` model), streaming WebSocket — one connection
+  minted per call and reused for every turn (`app/services/rumik_tts.py`).
+  Chosen over Sarvam TTS primarily on cost (~6x cheaper per character) with
+  latency measured close to parity once the socket is warm; see that file's
+  own module docstring for the full measured numbers and history — TTS has
+  moved between OpenAI, Sarvam, and Rumik more than once as real latency/
+  cost data came in, so check that docstring rather than assuming this is
+  settled forever. No cross-provider fallback on a TTS failure — that
+  utterance (or the call) just ends; see the same docstring for why a
+  fallback doesn't fit either provider's persistent-connection design.
+- `/admin/health` (see "Admin" below) includes a live check that actually
+  exercises both providers with a real tiny synthesis/transcription, not
+  just a key-presence check — the fastest way to confirm a deployed
+  environment's credentials actually work.
+
 ## Admin
 
-`/admin` (HTTP Basic auth) shows one row per call — joining `Sheet1`,
-`Bookings`, and `Recordings` by `CallSessionId` (see
-`app/admin/sheets_reader.py`), not one row per logged interaction. There's
-no local database in this project (unlike `ai-receptionist`), so this reads
-the Google Sheet live via the Sheets API on every request rather than a
-cached copy — see `app/admin/`.
+`/admin` (HTTP Basic auth, same credentials as `/live`) shows one row per
+call — joining `Sheet1`, `Bookings`, and `Recordings` by `CallSessionId`
+(see `app/admin/sheets_reader.py`), not one row per logged interaction.
+There's no local database in this project, so this reads the Google Sheet
+live via the Sheets API on every request. It's registered on Pipecat's own
+dev-runner FastAPI app (`pipecat.runner.run` exports `app` specifically so
+other modules can add routes before calling `main()`), so it's the same
+process and same URL as the voice agent itself.
 
-It's registered on Pipecat's own dev-runner FastAPI app (`pipecat.runner.run`
-exports `app` specifically so other modules can add routes before calling
-`main()` — see that module's docstring), so it's the same process and same
-URL as the voice agent itself, not a separate service.
+**`/admin/health`** (also admin-gated) runs live functional checks — not
+just "is a key present" — against every provider this pipeline depends on:
+a real tiny LLM completion, a real tool-call probe (catches the specific
+failure mode where a model silently narrates a fake tool call as text
+instead of calling it — see TROUBLESHOOTING.md), a real STT transcription,
+a real synthesis from both TTS providers, and the live Drive-recording
+credential path. Every check makes a real, billed API call — check this
+first before guessing at a production issue.
+
+**`admin_service/`** is a separate, standalone multi-tenant dashboard app
+(own `Dockerfile`, own deployment, port 8081) — per-restaurant dashboards
+plus a superadmin view, config-driven (`admin_service/config.yaml`) rather
+than hardcoded, so adding a client's dashboard doesn't need a code change.
+Deploys and scales independently of the voice agent above; see
+`.env.example`'s own section for its (separate) credentials.
+
+A background loop (`app/pipeline/idle_post_processor.py`, on by default —
+`IDLE_POST_PROCESSING_ENABLED`) picks up finished calls once the bot goes
+idle and backfills a `PostConfidence`/`Escalated` verdict onto the
+`Recordings` sheet via a forced-tool-call OpenAI classification pass over
+the transcript — both admin dashboards surface this (red "Follow-up
+needed" outcomes, confidence and escalation columns/filters), falling back
+to the live self-reported (noisier, mid-call) values until it's run.
 
 ## Reservations & logging
 
@@ -84,7 +137,11 @@ n8n risks dead air if Railway's free tier cold-starts it mid-call:
 - `logInteraction` (`app/tools/log_interaction.py`) — appends a row to the
   `Sheet1` tab: `Timestamp, CallDate, CallSessionId, CallerName,
   CallerPhone, Topic, Resolved, Details, GuestsCount, Drift,
-  CallConfidence`.
+  CallConfidence`. Not called live by the model anymore — see below.
+  Also texts `Restaurant.owner_phone` (per-client, `app/config/
+  restaurants/*.py`) the moment a topic logs `resolved=false`, if
+  `TWILIO_SMS_FROM_NUMBER` is configured — real-time human-escalation
+  alerting, independent of whichever provider carries the call.
 - `check_availability` (`app/tools/reservations.py`) — the model must call
   this before confirming any reservation. Validates the requested date
   isn't in the past and the requested time falls inside the active
@@ -97,17 +154,29 @@ n8n risks dead air if Railway's free tier cold-starts it mid-call:
   CallSessionId, Date, Time, GuestsCount, CallerName, CallerPhone, Status`.
 - Call recordings (`app/pipeline/recording.py`) — saved separately at call
   end, appends a row to the `Recordings` tab: `Timestamp, CallSessionId,
-  CallerPhone, DurationSecs, RecordingURL, Transcript, Summary`.
+  CallerPhone, DurationSecs, RecordingURL, Transcript, Summary` (plus
+  `PostConfidence`/`Escalated`/`PostProcessedAt`, backfilled later — see
+  "Admin" above).
 
-The system prompt (`app/pipeline/prompts.py`) hard-gates this: the model is
-told never to speak a reservation confirmation without a `booked: true`
-result from `book_table` in the same conversation. It's also given the
-current date/time (in the restaurant's timezone) so it can resolve relative
-dates like "tomorrow" — explicitly instructed to use that *only* for date
-resolution, never to judge whether a requested time is "too late" relative
-to when the call is happening. A call at 3 AM asking for a table at 9 PM
-that same day is normal; the only thing that decides bookability is whether
-the time falls inside the posted operating hours.
+`logInteraction` is **not** a live tool the model calls mid-turn anymore —
+a real trace showed the model splitting every turn into a silent
+tool-call-only round followed by a separate spoken-reply round, doubling
+LLM round-trips per turn. `app/pipeline/logging_enforcer.py`'s
+`LogInteractionEnforcer` backfills it in the background instead, off the
+call's critical path, tracking `log_interaction` specifically across a
+transaction's silent tool-call rounds (`check_availability`/`book_table`/
+`end_call` each land in their own round first) so it doesn't fire a
+redundant classification call once the real one has already landed.
+
+The system prompt (`app/pipeline/prompts.py`) hard-gates the reservation
+flow: the model is told never to speak a reservation confirmation without a
+`booked: true` result from `book_table` in the same conversation. It's also
+given the current date/time (in the restaurant's timezone) so it can
+resolve relative dates like "tomorrow" — explicitly instructed to use that
+*only* for date resolution, never to judge whether a requested time is "too
+late" relative to when the call is happening. A call at 3 AM asking for a
+table at 9 PM that same day is normal; the only thing that decides
+bookability is whether the time falls inside the posted operating hours.
 
 `google-api-python-client` is a blocking client, not asyncio-native — every
 Sheets call from these tools goes through `asyncio.to_thread(...)` so it
@@ -118,7 +187,8 @@ can't stall audio on the live call while it's in flight.
 Hitting a real failure — deploy crash-loop, bot apologizing and hanging up,
 wrong restaurant's facts, missing admin columns — check
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) first; it also documents what the
-`CALL_HEALTH*` log lines mean.
+`CALL_HEALTH*` log lines mean, and is kept current with real production
+incidents (with commit hashes), not just hypotheticals.
 
 ```bash
 python -m app.main -t exotel
@@ -139,33 +209,42 @@ public `wss://` URL.
 
 **`/live` is a browser WebRTC test client** (HTTP Basic auth, same
 credentials as `/admin`) — open it, click Connect, and talk to this exact
-bot from your mic without placing a real (billed) Exotel/Vobiz call. See
-`app/live_client.py` and TROUBLESHOOTING.md's "Testing without a real
-(billed) phone call". Otherwise, testing this pipeline means placing (or
-forwarding) a real call through Exotel, or driving `/ws` directly with a
-script that speaks Exotel's Media Streams JSON protocol (`event: "start" |
-"media" | "dtmf"`, base64 PCM payloads).
+bot from your mic without placing a real (billed) Exotel/Vobiz call. It
+talks directly to pipecat's `POST /api/offer`, not the standard prebuilt
+client flow — see `app/live_client.py` and TROUBLESHOOTING.md's "Testing
+without a real (billed) phone call" for why. Requires the `webrtc` extra
+(`aiortc`, already in `requirements.txt`). Otherwise, testing this pipeline
+means placing (or forwarding) a real call through Exotel/Twilio/Vobiz, or
+driving `/ws` directly with a script that speaks the provider's own Media
+Streams JSON protocol.
 
 **Provider is swappable, not hardcoded to Exotel.** `transport_params` in
 `app/main.py` registers exotel/twilio/telnyx/plivo identically — pipecat
 auto-detects whichever one actually connects and picks the matching
-serializer, so no code changes are needed to switch. Exotel is the
-production target, but it needs TRAI DLT lead time before it's fully live;
-`-t twilio` (or `telnyx`/`plivo`) plus a free-trial/pay-as-you-go number is
-a drop-in stand-in for testing/dev in the meantime — just note that,
-unlike Exotel, those three connect via an XML webhook (`POST /`) rather
-than a raw WebSocket URL, so also pass `--proxy <your-ngrok-or-railway-host>`
-when using one of them. In the Docker image this is controlled by the
-`TELEPHONY_TRANSPORT` env var (defaults to `exotel`) instead of `-t`
-directly — see `Dockerfile`.
+serializer, so no code changes are needed to switch between those four.
+Vobiz needs one extra step since it auto-detects on the wire as "plivo"
+but needs different call-ending behavior (`_create_vobiz_transport` in
+`app/main.py` intercepts it before `create_transport()` builds a real
+Plivo serializer). Exotel is the production target, but it needs TRAI DLT
+lead time before it's fully live; `-t twilio` (or `telnyx`/`plivo`) plus a
+free-trial/pay-as-you-go number is a drop-in stand-in for testing/dev in
+the meantime — just note that, unlike Exotel, those connect via an XML
+webhook (`POST /`) rather than a raw WebSocket URL, so also pass
+`--proxy <your-ngrok-or-railway-host>` when using one of them. In the
+Docker image this is controlled by the `TELEPHONY_TRANSPORT` env var
+(defaults to `exotel`) instead of `-t` directly — see `Dockerfile`.
 
 ## Eval suite
 
 `eval_scenarios/manifest.yaml` lists 29 behavioral scenarios (text and
 audio) run against a fresh `app/main.py -t eval` bot per scenario, judged by
-`gpt-5-mini`. This costs real OpenAI/Sarvam API calls and writes real rows
-to the configured Google Sheet — every scenario's caller name/phone is
-prefixed `ZZ-EVALTEST` so they're easy to find and delete afterward.
+an ensemble (`eval_scenarios/services.py`'s `ensemble_judge_llm` — a
+gpt-4o-mini primary with a gpt-5-mini second opinion before trusting a
+"no" verdict; a single judge model flip-flopped on identical input across
+repeat runs, see that file for the specifics). This costs real OpenAI/
+Sarvam API calls and writes real rows to the configured Google Sheet —
+every scenario's caller name/phone is prefixed `ZZ-EVALTEST` so they're
+easy to find and delete afterward.
 
 ```bash
 export OPENAI_API_KEY=...   # the harness's own judge client reads this
@@ -194,13 +273,11 @@ Two things confirmed the hard way, not guessed:
 
 **Known fixture staleness, not a bot bug if you see these fail:**
 
-- A handful of scenarios (`03`, `10`, `12`, `13`, `19`, `24`, `25`, `29`)
-  hardcode an absolute reservation date. These necessarily rot as real time passes them by —
-  the eval YAML format has no templating for "tomorrow," so there's no way
-  to keep them evergreen short of hand-bumping the dates periodically (or
-  building a preprocessing step that does it). If one of these fails on a
-  date/past-date complaint, check today's date against the hardcoded one
-  before assuming a regression.
+- A handful of scenarios hardcode an absolute reservation date, which
+  necessarily rots as real time passes it by — the eval YAML format has no
+  templating for "tomorrow." If a scenario fails on a date/past-date
+  complaint, check today's date against the hardcoded one before assuming
+  a regression; hand-bump the date in that scenario's own YAML comment.
 - `01_hours_question` and `04_reservation_outside_hours` assert Spice Route
   Kitchen-specific facts (e.g. "closed on Mondays"). They'll fail if
   `RESTAURANT_ID` isn't `spice_route_kitchen` when the suite runs — set it
@@ -213,88 +290,48 @@ Two things confirmed the hard way, not guessed:
   on caller-facing cleanliness can fail here even when a real caller would
   never hear the offending text — cross-check against the raw `aggregate`
   in the scenario's `.eval.log` before treating it as a live bug.
-
-## What's ported vs. what's new
-
-- `app/config/restaurants/spice_route_kitchen.py` — the restaurant facts and
-  system prompt are a **verbatim port** of `vapi_assistant.json`'s
-  `model.messages[0].content`. Nothing about the business logic, reservation
-  rules, or `logInteraction` timing was changed.
-- `app/pipeline/prompts.py` — the one real addition: a language instruction
-  appended after the ported prompt, telling the model to reply in whatever
-  language/mix the caller used. Vapi's transcriber was pinned to
-  `language: "en"`; this pipeline's Sarvam STT isn't, so the model actually
-  needs telling.
-- `app/tools/log_interaction.py` — same `logInteraction` schema
-  (`callerName`, `callerPhone`, `topic`, `resolved`, `details`,
-  `guestsCount`). Originally POSTed a Vapi-shaped envelope to n8n's webhook
-  (matching `1b. Parse Vapi Tool Call`'s expected shape) so
-  `n8n/restaurant_reception_workflow.json` needed zero edits; now writes
-  directly to Sheets instead (see "Reservations & logging" above) — n8n's
-  `1a`-`1f` live-webhook branch is unused as a result and should be deleted
-  from that workflow next time it's touched.
-
-## Deviations from the original plan doc (found while building, not guesses)
-
-- **TTS is OpenAI (`voice=echo`, matching the Vapi config), not edge-tts.**
-  Telugu/Hindi-matched voices are deferred — replies are correct-language
-  text from the LLM, but always spoken in an English TTS voice for now. When
-  Telugu/Hindi voice quality gets picked up, Sarvam TTS is the natural next
-  thing to evaluate, since Sarvam is already doing STT here.
-- **No `app/services/edge_tts_service.py` and no custom transport module.**
-  The original directory sketch assumed hand-wiring a transport and a custom
-  TTS wrapper. Pipecat's dev runner (`pipecat.runner.run.main()`) already
-  picks the transport from `transport_params` itself — `app/main.py` only
-  needs a `bot(runner_args)` entry point, nothing custom to build.
-- **WebRTC (browser test client) was dropped once real telephony landed.**
-  The prototype initially ran on `SmallWebRTCTransport` for browser-based dev
-  calls (with a Metered.ca TURN relay so it worked off localhost). That's
-  gone now — `app/main.py` wires only Exotel's `FastAPIWebsocketTransport`,
-  since a real phone number is the actual call path and keeping WebRTC around
-  as a second transport had no purpose beyond dev convenience.
+- Run-to-run judge noise is real and separate from the above — rerun a
+  lone failure before treating a single red scenario as a regression; a
+  reproducible failure across 3+ identical runs is the actual signal.
 
 ## Explicitly out of scope for this phase (flagged, not built)
 
 - Sarvam STT accuracy hasn't been separately re-validated against Exotel's
   8kHz phone audio (vs. the higher sample rates STT is usually tuned on) —
   worth confirming under real call conditions, not just assumed at parity.
-- Multi-restaurant runtime config loading (structure allows it, only Spice
-  Route Kitchen is wired up).
-- Telugu/Hindi TTS voice matching (see "Deviations" above).
 - **No seat/order cap.** `check_availability` validates operating hours only
   — every in-hours slot reports available, on purpose, per current scope.
-- **No escalation-specific flag.** The prompt already has the bot collect
-  name/phone/reason on anything it can't resolve and say the owner will call
-  back, and `logInteraction`'s `resolved: false` captures that it happened —
-  but there's no distinct "this one's a complaint/unusual-request escalation"
-  category separate from an ordinary "let me take a message," which is what
-  a future immediate staff-alert trigger would need to fire on.
-- **No immediate escalation alert / no rebuilt end-of-day digest.** n8n's
-  `2a`-`2e` Summary Branch still runs at 9 PM (not ~10 PM), builds its
-  summary with hand-rolled string logic rather than an LLM call, and tries
-  to place an outbound call via Vapi's API — a platform this project no
-  longer uses. Needs a rebuild once the delivery channel (WhatsApp/SMS/email)
-  is decided.
-- **No missed-call → outbound-callback detection**, and outbound calling
-  shouldn't be enabled at all until TRAI DLT registration is complete.
-- **No transcript persistence or outcome database.** `logInteraction` logs a
-  short topic summary, not a verbatim transcript, and there's no FAQ/
-  booking/order/escalation/missed outcome taxonomy yet. Full-call audio
-  recording is built and live (`app/pipeline/recording.py`), landing in a
-  "Call Recordings" folder in Drive via `app/services/drive_oauth_client.py`
-  — OAuth as an actual Google account, not the service account (which has
-  had zero Drive storage quota since 2021, confirmed live via
-  `storageQuotaExceeded` on an actual upload attempt). `app/services/r2_client.py`
-  (Cloudflare R2) is the intended longer-term backend once R2 is actually
-  activated on the Cloudflare account — see `GOOGLE_OAUTH_*` / `R2_*` in
-  `.env.example` for both setups.
 - **No phone-order-taking flow.** The prompt/tools only handle reservations;
   `book_table`/`Bookings` don't cover takeout/delivery orders.
+- **No missed-call → outbound-callback detection**, and outbound calling
+  shouldn't be enabled at all until TRAI DLT registration is complete.
+- **No rebuilt end-of-day digest.** n8n's `2a`-`2e` Summary Branch still
+  runs at 9 PM (not ~10 PM), builds its summary with hand-rolled string
+  logic rather than an LLM call, and tries to place an outbound call via
+  Vapi's API — a platform this project no longer uses. Needs a rebuild once
+  the delivery channel (WhatsApp/SMS/email) is decided. (Real-time,
+  per-call escalation alerting — as opposed to this end-of-day digest — is
+  built; see "Reservations & logging" above.)
+- **No verbatim-transcript-driven outcome taxonomy beyond confidence/
+  escalation.** `logInteraction` logs a short topic summary, not the full
+  transcript, for the live per-interaction log; full-call transcripts are
+  captured separately in `Recordings` (see above) and idle post-processing
+  now derives a confidence/escalation verdict from them, but there's no
+  finer-grained FAQ/booking/order/missed-call categorization yet.
+- Full-call audio recording lands in Google Drive via OAuth as an actual
+  Google account (`app/services/drive_oauth_client.py`) — the service
+  account has had zero Drive storage quota since 2021, confirmed live via
+  `storageQuotaExceeded` on an actual upload attempt. That OAuth refresh
+  token expires ~7 days unless the OAuth consent screen is published to
+  production in Google Cloud Console — see TROUBLESHOOTING.md if
+  recordings silently stop appearing. `app/services/r2_client.py`
+  (Cloudflare R2) is the intended longer-term backend once R2 is actually
+  activated on the Cloudflare account — see `.env.example` for both setups.
 
 ## A note on Pipecat API stability
 
 This is a fast-moving library. Every import path and constructor signature
-in this scaffold was checked against the actual `pipecat-ai` source on
+in this codebase was checked against the actual `pipecat-ai` source on
 GitHub (`main` branch) at build time, not from memory or docs prose — but if
 `pip install` pulls a version where something's shifted, the fastest way to
 resync is the telephony examples under `examples/` in the

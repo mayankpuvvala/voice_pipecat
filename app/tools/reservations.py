@@ -129,7 +129,11 @@ async def book_table(
             the caller said it — never shorten it, "clean it up," or drop any
             part of it because it sounds unusual; an unfamiliar-sounding name
             is still the caller's real name, not a transcription artifact to
-            correct.
+            correct. Always write it in English/Latin letters — if the caller
+            spoke it in Hindi or the transcript rendered it in Devanagari
+            script, spell it out phonetically in Roman letters (e.g.
+            "Duryodhan", not "दुर्योधन"); this is a script transliteration,
+            not a correction to the name itself.
         caller_phone: Caller's callback number if given, otherwise empty string.
     """
     if not caller_name.strip():

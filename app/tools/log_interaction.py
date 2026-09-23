@@ -134,7 +134,11 @@ async def log_interaction(
         resolved: True if answered directly from the restaurant facts (including taking a
             reservation), false if the owner needs to follow up. This is about *which path*
             you took, not about whether it went well.
-        caller_name: Caller's name if given, otherwise empty string.
+        caller_name: Caller's name if given, otherwise empty string. Always
+            write it in English/Latin letters — if the caller spoke it in
+            Hindi or the transcript rendered it in Devanagari script, spell
+            it out phonetically in Roman letters (e.g. "Duryodhan", not
+            "दुर्योधन").
         caller_phone: Caller's callback phone number if given, otherwise empty string.
         details: One short sentence with specifics the owner needs.
         guests_count: Number of guests, e.g. "3", only when this topic is a reservation.
