@@ -1,4 +1,4 @@
-pipecat-ai[openai,silero,websocket,sarvam,runner,tracing,webrtc]==1.7.0
+pipecat-ai[openai,silero,websocket,sarvam,deepgram,runner,tracing,webrtc]==1.7.0
 openai==2.54.0
 opentelemetry-exporter-otlp-proto-http==1.44.0
 python-dotenv==1.2.3

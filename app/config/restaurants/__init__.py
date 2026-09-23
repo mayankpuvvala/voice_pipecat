@@ -44,6 +44,15 @@ class Restaurant:
     # until the client confirms their real number.
     owner_phone: str = ""
 
+    # Which STT/TTS vendor this restaurant's calls use — the one place to
+    # switch either, per client. See app/services/stt_factory.py and
+    # tts_factory.py for what each value builds and STT_PROVIDERS/
+    # TTS_PROVIDERS there for the valid values; both raise at startup on an
+    # unrecognized one, so a typo here fails loudly instead of on the first
+    # call.
+    stt_provider: str = "sarvam"
+    tts_provider: str = "rumik"
+
 
 # Imported after `Restaurant` is defined — each client module imports it from here.
 from app.config.restaurants.spice_route_kitchen import SPICE_ROUTE_KITCHEN  # noqa: E402

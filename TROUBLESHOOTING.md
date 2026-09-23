@@ -298,6 +298,57 @@ verification against a real call, not just a code review.
 
 ---
 
+## Switching STT/TTS vendor per restaurant (2026-09-23)
+
+`Restaurant.stt_provider` / `.tts_provider` (`app/config/restaurants/*.py`)
+are the one place to change either, per client — see
+`app/services/stt_factory.py` / `tts_factory.py`. Both raise `ValueError` at
+call-setup time on an unrecognized value rather than falling back silently.
+
+**Rumik has no STT product** — checked docs.rumik.ai and its llms.txt index
+directly (2026-09-23): TTS only ("Silk" API), no ASR/transcription endpoint
+anywhere in their docs. `STT_PROVIDERS` in `stt_factory.py` is Sarvam and
+Deepgram only for this reason, not an oversight.
+
+**Deepgram config**: `nova-3` with `language="multi"` — Deepgram's own
+multilingual code-switching mode (docs.deepgram.com/docs/
+multilingual-code-switching), one of ~10 languages including Hindi. Verified
+for real (2026-09-23): fed the same Hindi/English code-mixed audio through
+both Sarvam (codemix mode) and Deepgram (nova-3/multi) via
+`pipecat.tests.utils.run_test` driving the actual factory-built services —
+Sarvam transliterates everything into Devanagari (including the English
+words, phonetically); Deepgram actually switches script mid-transcript
+(`"मैं table book करना चाहता हूं Saturday को सात बजे के लिए"`), which is a
+different but equally usable shape for downstream code that just needs the
+text. `"multi"` isn't a `pipecat.transcriptions.language.Language` enum
+member — passed as the raw string `STTSettings.language` already accepts.
+
+**Gotcha hit while testing** (not a factory bug, but will bite anyone
+writing a similar throwaway script): `DeepgramSTTService._connect()` only
+launches the WebSocket handshake as a background task and returns
+immediately — `StartFrame` does NOT wait for the socket to actually open.
+Audio sent in the first ~1-1.5s after pipeline start gets silently dropped
+(`run_stt`: `if self._connection: send_media(...)` — no error, no frame,
+just gone). Real calls never hit this (caller audio doesn't start within
+~1.5s of pipeline start); a burst test that queues all its audio frames
+immediately after `StartFrame` does. Sleep past the connect before sending
+audio in any standalone test.
+
+**TTS**: `RumikTTSService` (existing), `SarvamTTSService`
+(`bulbul:v3`/`EN_IN`), and pipecat's `OpenAITTSService`
+(`gpt-4o-mini-tts`) — all three read Hindi/English code-mixed reply text
+straight from the script. `TTSLanguageSwitcher` (`app/pipeline/
+tts_language_switcher.py`) stays wired regardless of provider; it's a no-op
+for Rumik and OpenAI (neither reads `Settings.language` at synthesis time)
+and does real work for Sarvam (`target_language_code`). Same "no
+retry/fallback, a TTS failure just ends the call" posture as before,
+now covering whichever provider is active — `on_pipeline_error` in
+`app/main.py` checks `frame.processor is tts` (identity, not
+`isinstance` against one vendor's class) so this stays true across the
+switch.
+
+---
+
 ## Deploy crash-loops (or 502s) right after a push
 
 **Cause.** Two real incidents, same shape: something worked locally but was

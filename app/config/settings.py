@@ -41,6 +41,7 @@ class Settings:
     groq_model: str = os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
 
     sarvam_api_key: str = os.environ.get("SARVAM_API_KEY", "")
+    deepgram_api_key: str = os.environ.get("DEEPGRAM_API_KEY", "")
     rumik_api_key: str = os.environ.get("RUMIK_API_KEY", "")
     twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")

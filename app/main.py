@@ -33,8 +33,8 @@ from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequestHan
 from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.evals.transport import EvalTransportParams
-from pipecat.services.sarvam.stt import SarvamSTTService
-from pipecat.transcriptions.language import Language
+from pipecat.services.stt_service import STTService
+from pipecat.services.tts_service import TTSService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 from pipecat.workers.runner import WorkerRunner
@@ -55,8 +55,8 @@ from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
 from app.pipeline.tts_language_switcher import TTSLanguageSwitcher
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
-from app.services.resilient_stt import ResilientSarvamSTTService
-from app.services.rumik_tts import RumikTTSService
+from app.services.stt_factory import build_stt
+from app.services.tts_factory import build_tts
 from app.services.twilio_client import fetch_ice_servers_sync, lookup_caller_number
 from app.tools.end_call import end_call
 from app.tools.reservations import book_table, check_availability
@@ -302,15 +302,12 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
         restaurant_name=ACTIVE_RESTAURANT.name,
     )
 
-    def _build_stt() -> ResilientSarvamSTTService:
-        return ResilientSarvamSTTService(
-            api_key=settings.sarvam_api_key,
-            mode="codemix",
-            settings=SarvamSTTService.Settings(
-                model="saaras:v3",
-                language=Language.HI_IN,
-                start_speech_volume_threshold=-40.0,
-            ),
+    def _build_stt() -> STTService:
+        # Vendor picked per-restaurant via ACTIVE_RESTAURANT.stt_provider —
+        # see app/services/stt_factory.py, the one place that switches it.
+        return build_stt(
+            ACTIVE_RESTAURANT,
+            settings,
             on_connect_exhausted=lambda reason: call_health.degrade_with_apology("stt", reason),
         )
 
@@ -344,38 +341,10 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
             ),
         )
 
-    def _build_tts() -> RumikTTSService:
-        # Rumik's mulberry model over its persistent per-call WebSocket (see
-        # app/services/rumik_tts.py) — ~6x cheaper per character than Sarvam
-        # (₹0.50 vs ₹3.00/1k chars) and, once the socket is warm, measured
-        # on par with Sarvam's own TTFA (2026-09-22: median 313ms across 10
-        # real utterances vs Sarvam's ~260ms; see that file's module
-        # docstring for the full writeup). Natively handles Hindi/English
-        # code-mixed text from the script alone, so — unlike Sarvam — it
-        # needs no per-reply language switch; tts_language_switcher.py stays
-        # wired below but is a no-op for this service (RumikTTSSettings has
-        # a `language` field for API-shape compatibility only; nothing in
-        # rumik_tts.py's synthesis payload reads it).
-        #
-        # No retry/fallback wrapper here — a TTS failure just ends the call,
-        # same posture Sarvam had (see rumik_tts.py's module docstring for
-        # why a mid-call OpenAI fallback isn't a good fit for either
-        # provider's persistent-WebSocket design).
-        #
-        # To revert to Sarvam: swap this for SarvamTTSService(api_key=
-        # settings.sarvam_api_key, settings=SarvamTTSService.Settings(
-        # model="bulbul:v3", language=Language.EN_IN, min_buffer_size=30))
-        # and restore `from pipecat.services.sarvam.tts import
-        # SarvamTTSService` + the SarvamTTSService branch in on_pipeline_error.
-        return RumikTTSService(
-            api_key=settings.rumik_api_key,
-            speaker="adam",
-            description=(
-                "a male, 30s, indian accent voice, normal pitch, smooth "
-                "timbre, conversational pacing, professional register, "
-                "like a restaurant host"
-            ),
-        )
+    def _build_tts() -> TTSService:
+        # Vendor picked per-restaurant via ACTIVE_RESTAURANT.tts_provider —
+        # see app/services/tts_factory.py, the one place that switches it.
+        return build_tts(ACTIVE_RESTAURANT, settings)
 
     def _build_user_aggregators():
         return LLMContextAggregatorPair(
@@ -452,13 +421,15 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
 
     @worker.event_handler("on_pipeline_error")
     async def on_pipeline_error(worker, frame):
-        # STT connect failures are handled by ResilientSarvamSTTService's
+        # STT connect failures are handled by the resilient STT wrapper's
         # own callback instead — per-chunk STT errors here are common noise.
         if isinstance(frame.processor, OpenAILLMService):
             # Means both the SDK's own retries and retry_on_timeout were exhausted.
             await call_health.note_llm_failure(frame.error)
-        elif isinstance(frame.processor, RumikTTSService):
+        elif frame.processor is tts:
             # No retry/fallback wrapper for TTS yet — any error ends the call.
+            # Checked by instance (not isinstance of one provider) since tts
+            # is whichever service ACTIVE_RESTAURANT.tts_provider picked.
             await call_health.degrade_silently("tts", frame.error)
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
