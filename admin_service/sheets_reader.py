@@ -19,6 +19,24 @@ _CACHE_TTL_SECONDS = 20.0
 
 _cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
+# eval_scenarios/*.yaml scripts the caller as "ZZ-EVALTEST <name>", and ad
+# hoc stress testing has used "ZZ-STRESSTEST" directly as the CallSessionId
+# — both are instances of a "ZZ-" prefix convention for marking synthetic
+# calls. Nothing filtered these out of the dashboard, so they inflated call
+# counts/charts until scripts/cleanup_eval_test_rows.py purged the backlog.
+# Keep filtering going forward (matching the prefix generically, not just
+# today's known marker strings) so any future ZZ-<whatever> test run can't
+# do this again.
+_TEST_MARKER_PREFIX = "ZZ-"
+
+
+def _is_test_row(row: dict[str, Any]) -> bool:
+    return (
+        row.get("CallerName", "").strip().upper().startswith(_TEST_MARKER_PREFIX)
+        or row.get("CallerPhone", "").strip().upper().startswith(_TEST_MARKER_PREFIX)
+        or row.get("CallSessionId", "").strip().upper().startswith(_TEST_MARKER_PREFIX)
+    )
+
 
 def _client():
     info = {
@@ -86,6 +104,18 @@ def _fetch_calls_uncached(sheet_id: str) -> list[dict[str, Any]]:
     interactions = _read_rows_safe(sheet_id, "Sheet1")
     bookings = _read_rows_safe(sheet_id, "Bookings")
     recordings = _read_rows_safe(sheet_id, "Recordings")
+
+    # A row not carrying the marker itself (e.g. a Recordings row) still
+    # counts as test data if it shares a CallSessionId with one that does —
+    # otherwise it'd be an orphaned "real" call with no caller name.
+    test_session_ids = {
+        row["CallSessionId"]
+        for row in (*interactions, *bookings, *recordings)
+        if _is_test_row(row) and row.get("CallSessionId", "")
+    }
+    interactions = [r for r in interactions if r.get("CallSessionId", "") not in test_session_ids]
+    bookings = [r for r in bookings if r.get("CallSessionId", "") not in test_session_ids]
+    recordings = [r for r in recordings if r.get("CallSessionId", "") not in test_session_ids]
 
     calls: dict[str, dict[str, Any]] = {}
 

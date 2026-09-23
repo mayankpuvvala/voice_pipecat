@@ -432,6 +432,17 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
             # is whichever service ACTIVE_RESTAURANT.tts_provider picked.
             await call_health.degrade_silently("tts", frame.error)
 
+    @worker.event_handler("on_idle_timeout")
+    async def on_idle_timeout(worker):
+        # pipecat cancels the worker itself right after this handler runs
+        # (cancel_on_idle_timeout defaults to True) — none of the app's own
+        # call-ending paths (on_client_disconnected, end_call, CallHealth
+        # degrade) run for this one, so without this handler
+        # save_call_recording() logs the call with an empty Transcript
+        # despite a real recording/duration.
+        logger.info("Pipeline idle timeout — capturing transcript before worker cancels")
+        capture_transcript()
+
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)
 
