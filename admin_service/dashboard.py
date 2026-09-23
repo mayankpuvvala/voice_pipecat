@@ -6,6 +6,7 @@ the CSS/table styling this borrows.
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime
 from html import escape
 from typing import Any
@@ -192,7 +193,7 @@ tbody tr:hover td { background: var(--surface-2); }
 .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
 .listen-link { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 0.82rem; }
 .listen-link:hover { text-decoration: underline; }
-.view-transcript { background: none; border: none; font: inherit; padding: 0; cursor: pointer; }
+.view-transcript, .view-recording { background: none; border: none; font: inherit; padding: 0; cursor: pointer; }
 
 .pagination { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 16px 22px; }
 .pagination span { font-size: 0.8rem; color: var(--muted); }
@@ -481,6 +482,25 @@ def render_day_chart(day_counts: list[int]) -> str:
     return f'<div class="stick-chart">{cols}</div>'
 
 
+_DRIVE_FILE_ID_RE = re.compile(r"/d/([\w-]+)")
+_DIRECT_AUDIO_RE = re.compile(r"\.(mp3|wav|m4a|ogg|webm)(\?|$)", re.IGNORECASE)
+
+
+def _recording_embed(url: str) -> tuple[str, str]:
+    """Returns (mode, embed_url). 'audio' means url is a direct media file,
+    playable in a plain <audio> element. 'frame' means it's a Google Drive
+    view link (recordings currently upload via drive_oauth_client, which
+    only ever returns a webViewLink) — those aren't raw media URLs, so the
+    modal embeds Drive's own /preview player in an <iframe> instead of
+    linking out to a new tab."""
+    if _DIRECT_AUDIO_RE.search(url):
+        return "audio", url
+    drive_match = _DRIVE_FILE_ID_RE.search(url)
+    if drive_match:
+        return "frame", f"https://drive.google.com/file/d/{drive_match.group(1)}/preview"
+    return "audio", url
+
+
 def render_call_row(call: dict[str, Any]) -> str:
     date_str, time_str, iso_date = _format_datetime(call["timestamp"])
     duration_str = _format_duration(call.get("duration_secs"))
@@ -495,16 +515,22 @@ def render_call_row(call: dict[str, Any]) -> str:
         else '<span class="badge badge-good"><span class="dot"></span>Resolved</span>'
     )
 
+    caller_label = escape(call["caller_name"] or "—")
+    when_label = escape(f"{date_str} {time_str}")
+    phone_label = escape(call["caller_phone"] or "—")
+
     if call["recording_url"]:
-        recording_html = f'<a class="listen-link" href="{escape(call["recording_url"])}" target="_blank" rel="noopener">▶ Listen</a>'
+        mode, embed_url = _recording_embed(call["recording_url"])
+        recording_html = (
+            '<button type="button" class="listen-link view-recording" '
+            f'data-caller="{caller_label}" data-when="{when_label}" '
+            f'data-mode="{mode}" data-url="{escape(embed_url)}">▶ Listen</button>'
+        )
     else:
         recording_html = '<span class="muted">—</span>'
 
     transcript = call.get("transcript") or ""
     if transcript.strip():
-        caller_label = escape(call["caller_name"] or "—")
-        when_label = escape(f"{date_str} {time_str}")
-        phone_label = escape(call["caller_phone"] or "—")
         transcript_html = (
             '<button type="button" class="listen-link view-transcript" '
             f'data-caller="{caller_label}" data-when="{when_label}" '
@@ -626,6 +652,22 @@ _FILTER_DRAWER = """
     <div class="modal-body" id="modal-body"></div>
     <div class="modal-foot">
       <button class="btn btn-ghost" id="modal-close-2">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-scrim" id="recording-scrim">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="recording-title">
+    <div class="modal-head">
+      <div>
+        <h3 id="recording-title">Recording</h3>
+        <div class="modal-meta" id="recording-meta"></div>
+      </div>
+      <button class="btn btn-ghost" id="recording-close" aria-label="Close recording">✕</button>
+    </div>
+    <div class="modal-body" id="recording-body"></div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="recording-close-2">Close</button>
     </div>
   </div>
 </div>
@@ -901,18 +943,57 @@ _FILTER_SCRIPT = """
   }
   function closeTranscript() { modalScrim.classList.remove('open'); }
 
+  var recordingScrim = document.getElementById('recording-scrim');
+  var recordingTitle = document.getElementById('recording-title');
+  var recordingMeta = document.getElementById('recording-meta');
+  var recordingBody = document.getElementById('recording-body');
+
+  function openRecording(btn) {
+    recordingTitle.textContent = btn.getAttribute('data-caller') + "'s call";
+    recordingMeta.textContent = btn.getAttribute('data-when');
+    recordingBody.innerHTML = '';
+    var url = btn.getAttribute('data-url');
+    if (btn.getAttribute('data-mode') === 'frame') {
+      var iframe = document.createElement('iframe');
+      iframe.src = url;
+      iframe.width = '100%';
+      iframe.height = '120';
+      iframe.style.border = '0';
+      iframe.style.borderRadius = '10px';
+      iframe.setAttribute('allow', 'autoplay');
+      recordingBody.appendChild(iframe);
+    } else {
+      var audio = document.createElement('audio');
+      audio.controls = true;
+      audio.autoplay = true;
+      audio.style.width = '100%';
+      audio.src = url;
+      recordingBody.appendChild(audio);
+    }
+    recordingScrim.classList.add('open');
+  }
+  function closeRecording() {
+    recordingScrim.classList.remove('open');
+    recordingBody.innerHTML = '';
+  }
+
   tbody.addEventListener('click', function(e) {
-    var btn = e.target.closest('.view-transcript');
-    if (!btn) return;
-    openTranscript(btn);
+    var transcriptBtn = e.target.closest('.view-transcript');
+    if (transcriptBtn) { openTranscript(transcriptBtn); return; }
+    var recordingBtn = e.target.closest('.view-recording');
+    if (recordingBtn) { openRecording(recordingBtn); return; }
   });
   document.getElementById('modal-close').addEventListener('click', closeTranscript);
   document.getElementById('modal-close-2').addEventListener('click', closeTranscript);
   modalScrim.addEventListener('click', function(e) { if (e.target === modalScrim) closeTranscript(); });
+  document.getElementById('recording-close').addEventListener('click', closeRecording);
+  document.getElementById('recording-close-2').addEventListener('click', closeRecording);
+  recordingScrim.addEventListener('click', function(e) { if (e.target === recordingScrim) closeRecording(); });
   document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape') return;
     closeDrawer();
     closeTranscript();
+    closeRecording();
   });
 
   if (rows.length) applyFilters();
