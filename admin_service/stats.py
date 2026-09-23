@@ -108,11 +108,32 @@ def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -
 
     hour_counts = [0] * 24
     day_counts = [0] * 7
+    hour_minutes = [0.0] * 24
+    day_minutes = [0.0] * 7
+    hour_known_numbers: list[set[str]] = [set() for _ in range(24)]
+    day_known_numbers: list[set[str]] = [set() for _ in range(7)]
+    hour_has_unknown_number = [False] * 24
+    day_has_unknown_number = [False] * 7
     for call in calls:
         dt = _call_local_dt(call)
         if dt:
-            hour_counts[dt.hour] += 1
-            day_counts[dt.weekday()] += 1
+            h, d = dt.hour, dt.weekday()
+            hour_counts[h] += 1
+            day_counts[d] += 1
+            minutes = _call_minutes(call) or 0.0
+            hour_minutes[h] += minutes
+            day_minutes[d] += minutes
+            # No telephony integration yet, so caller_phone is often blank —
+            # dummy data until then. Callers missing a number just can't be
+            # told apart, so they're reported as "unknown" rather than each
+            # counted as its own unique caller.
+            phone = (call.get("caller_phone") or "").strip()
+            if phone:
+                hour_known_numbers[h].add(phone)
+                day_known_numbers[d].add(phone)
+            else:
+                hour_has_unknown_number[h] = True
+                day_has_unknown_number[d] = True
 
     minutes_used_this_month = sum(month_minutes)
     minutes_remaining_this_month = (
@@ -148,6 +169,12 @@ def compute_stats(calls: list[dict[str, Any]], minutes_allowed_per_month: int) -
         "topic_counts": dict(sorted(topic_counts.items(), key=lambda kv: kv[1], reverse=True)),
         "hour_counts": hour_counts,
         "day_counts": day_counts,
+        "hour_minutes": hour_minutes,
+        "day_minutes": day_minutes,
+        "hour_unique_numbers": [len(s) for s in hour_known_numbers],
+        "day_unique_numbers": [len(s) for s in day_known_numbers],
+        "hour_has_unknown_number": hour_has_unknown_number,
+        "day_has_unknown_number": day_has_unknown_number,
         "peak_hour": max(range(24), key=lambda h: hour_counts[h]) if any(hour_counts) else None,
         "quiet_hour_with_calls": (
             min((h for h in range(24) if hour_counts[h] > 0), key=lambda h: hour_counts[h])

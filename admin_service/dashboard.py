@@ -449,12 +449,26 @@ def render_topic_breakdown(topic_counts: dict[str, int]) -> str:
     return f'<div class="topic-list" id="topic-list">{rows}</div>'
 
 
-def render_hour_chart(hour_counts: list[int]) -> str:
+def _bucket_tooltip(label: str, count: int, minutes: float, unique: int, has_unknown: bool) -> str:
+    if unique == 0 and has_unknown:
+        unique_label = "unknown"
+    elif has_unknown:
+        unique_label = f"{unique} + unknown"
+    else:
+        unique_label = str(unique)
+    return (
+        f"{label} &middot; {count} call(s) &middot; {minutes:.1f} min &middot; "
+        f"{unique_label} unique number(s)"
+    )
+
+
+def render_hour_chart(stats: dict[str, Any]) -> str:
+    hour_counts = stats["hour_counts"]
     if not any(hour_counts):
         return '<p class="muted">No call-time data yet.</p>'
     peak = max(hour_counts) or 1
     cols = "".join(
-        f'<div class="stick-col" title="{h:02d}:00 &middot; {count} call(s)">'
+        f'<div class="stick-col" title="{_bucket_tooltip(f"{h:02d}:00", count, stats["hour_minutes"][h], stats["hour_unique_numbers"][h], stats["hour_has_unknown_number"][h])}">'
         f'<span class="stick-count">{count or ""}</span>'
         f'<div class="stick-bar" style="height:{(count / peak) * 100:.0f}%"></div>'
         f'<span class="stick-label">{h}</span>'
@@ -467,12 +481,13 @@ def render_hour_chart(hour_counts: list[int]) -> str:
 _DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-def render_day_chart(day_counts: list[int]) -> str:
+def render_day_chart(stats: dict[str, Any]) -> str:
+    day_counts = stats["day_counts"]
     if not any(day_counts):
         return '<p class="muted">No call-time data yet.</p>'
     peak = max(day_counts) or 1
     cols = "".join(
-        f'<div class="stick-col" title="{_DAY_LABELS[d]} &middot; {count} call(s)">'
+        f'<div class="stick-col" title="{_bucket_tooltip(_DAY_LABELS[d], count, stats["day_minutes"][d], stats["day_unique_numbers"][d], stats["day_has_unknown_number"][d])}">'
         f'<span class="stick-count">{count or ""}</span>'
         f'<div class="stick-bar" style="height:{(count / peak) * 100:.0f}%"></div>'
         f'<span class="stick-label">{_DAY_LABELS[d]}</span>'
@@ -1078,11 +1093,11 @@ def render_restaurant_page(
       <div class="split charts-split">
         <div class="card">
           <h3>Calls by hour of day (IST)</h3>
-          {render_hour_chart(stats["hour_counts"])}
+          {render_hour_chart(stats)}
         </div>
         <div class="card">
           <h3>Calls by day of week</h3>
-          {render_day_chart(stats["day_counts"])}
+          {render_day_chart(stats)}
         </div>
       </div>
     </section>

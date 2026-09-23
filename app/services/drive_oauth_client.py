@@ -85,4 +85,12 @@ def upload_recording(filename: str, wav_bytes: bytes) -> str:
         )
         .execute()
     )
+    file_id = file.get("id")
+    if file_id:
+        # Without this, the file is only visible to the OAuth-authorized
+        # account — the dashboard's embedded Drive player (any viewer,
+        # not signed into that account) gets a permission-denied page.
+        service.permissions().create(
+            fileId=file_id, body={"type": "anyone", "role": "reader"}, fields="id"
+        ).execute()
     return file.get("webViewLink", "")
