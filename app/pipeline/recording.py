@@ -43,9 +43,19 @@ async def save_call_recording(
     sample_rate: int,
     num_channels: int,
     transcript: str = "",
+    llm_provider: str = "",
+    stt_provider: str = "",
+    tts_provider: str = "",
 ) -> None:
     """Encode/upload the audio, generate a summary, and log one row for this
-    call. Never raises — a failure here shouldn't take down call teardown."""
+    call. Never raises — a failure here shouldn't take down call teardown.
+
+    llm_provider/stt_provider/tts_provider are the human-readable vendor+model
+    labels actually wired up for THIS call (see app.main's _build_llm/_build_stt/
+    _build_tts and stt_factory.describe_stt/tts_factory.describe_tts) — captured
+    at build time rather than re-derived from current config later, so the
+    record stays accurate even after a restaurant's provider config changes.
+    """
     if not pcm_audio and not transcript:
         logger.debug("Nothing captured for call {} — skipping recording save", call_session_id)
         return
@@ -78,6 +88,9 @@ async def save_call_recording(
         "RecordingURL": recording_url,
         "Transcript": transcript,
         "Summary": summary,
+        "LLMProvider": llm_provider,
+        "STTProvider": stt_provider,
+        "TTSProvider": tts_provider,
     }
     try:
         await asyncio.to_thread(sheets_client.append_row, _RECORDINGS_SHEET, row)

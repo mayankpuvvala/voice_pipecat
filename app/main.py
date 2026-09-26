@@ -55,8 +55,8 @@ from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
 from app.pipeline.tts_language_switcher import TTSLanguageSwitcher
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
-from app.services.stt_factory import build_stt
-from app.services.tts_factory import build_tts
+from app.services.stt_factory import build_stt, describe_stt
+from app.services.tts_factory import build_tts, describe_tts
 from app.services.twilio_client import fetch_ice_servers_sync, lookup_caller_number
 from app.tools.end_call import end_call
 from app.tools.reservations import book_table, check_availability
@@ -311,6 +311,16 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
             on_connect_exhausted=lambda reason: call_health.degrade_with_apology("stt", reason),
         )
 
+    def _describe_llm() -> str:
+        # Mirrors _build_llm's own branch condition -- kept as a separate,
+        # cheap-to-call function (rather than reading it off the built LLM
+        # instance) so recording the label doesn't need an isinstance check
+        # against two different service classes. See stt_factory.describe_stt/
+        # tts_factory.describe_tts for the STT/TTS equivalents.
+        if settings.groq_api_key and settings.groq_enabled:
+            return f"Groq ({settings.groq_model})"
+        return f"OpenAI ({settings.openai_model})"
+
     def _build_llm() -> OpenAILLMService:
         # Groq (Llama on LPU hardware) replaces OpenAI when configured, to
         # cut the 1-3s gpt-5-mini completion time paid per turn. It's a thin
@@ -359,6 +369,15 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
         asyncio.to_thread(_build_user_aggregators),
     )
 
+    # Captured once per call, at the same point the services themselves are
+    # built, so the Recordings row always reflects what THIS call actually
+    # used -- not whatever the config happens to say by the time the call
+    # ends (restaurant/env config can change between calls). See
+    # app.pipeline.recording.save_call_recording's docstring.
+    llm_provider_label = _describe_llm()
+    stt_provider_label = describe_stt(ACTIVE_RESTAURANT)
+    tts_provider_label = describe_tts(ACTIVE_RESTAURANT)
+
     logging_enforcer = LogInteractionEnforcer(
         context,
         worker_handle,
@@ -401,6 +420,9 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
             sample_rate,
             num_channels,
             transcript=call_state["transcript"],
+            llm_provider=llm_provider_label,
+            stt_provider=stt_provider_label,
+            tts_provider=tts_provider_label,
         )
 
     worker = PipelineWorker(

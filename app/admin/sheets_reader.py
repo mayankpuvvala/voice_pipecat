@@ -101,6 +101,10 @@ def _new_call(session_id: str) -> dict[str, Any]:
         "duration_secs": "",
         "transcript": "",
         "summary": "",
+        "llm_provider": "",
+        "stt_provider": "",
+        "tts_provider": "",
+        "providers_backfilled": False,
     }
 
 
@@ -189,6 +193,10 @@ def _fetch_calls_uncached() -> list[dict[str, Any]]:
         call["duration_secs"] = row.get("DurationSecs", "")
         call["transcript"] = row.get("Transcript", "")
         call["summary"] = row.get("Summary", "")
+        call["llm_provider"] = row.get("LLMProvider", "")
+        call["stt_provider"] = row.get("STTProvider", "")
+        call["tts_provider"] = row.get("TTSProvider", "")
+        call["providers_backfilled"] = str(row.get("ProvidersBackfilled", "")).strip().lower() == "true"
         # Idle-triggered whole-transcript analysis (app/pipeline/
         # idle_post_processor.py) — more reliable than the live per-topic
         # self-report above, but only exists once a call's actually been

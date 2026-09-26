@@ -72,3 +72,17 @@ def build_stt(
         f"Unknown stt_provider {provider!r} on restaurant {restaurant.name!r} — "
         f"expected one of {STT_PROVIDERS}"
     )
+
+
+# Vendor + model labels for build_stt's own branches, kept in sync with them
+# by hand (no service instance to introspect at this point) — used to record
+# which STT actually ran on a given call for the admin dashboard's
+# LLM/STT/TTS debug view. See app/pipeline/recording.py.
+_STT_LABELS = {
+    "sarvam": "Sarvam (saaras:v3)",
+    "deepgram": "Deepgram (nova-3)",
+}
+
+
+def describe_stt(restaurant: Restaurant) -> str:
+    return _STT_LABELS.get(restaurant.stt_provider, restaurant.stt_provider)

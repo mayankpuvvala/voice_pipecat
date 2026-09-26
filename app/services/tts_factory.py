@@ -76,3 +76,18 @@ def build_tts(restaurant: Restaurant, settings: Settings) -> TTSService:
         f"Unknown tts_provider {provider!r} on restaurant {restaurant.name!r} — "
         f"expected one of {TTS_PROVIDERS}"
     )
+
+
+# Vendor + model labels for build_tts's own branches, kept in sync with them
+# by hand (no service instance to introspect at this point) — used to record
+# which TTS actually ran on a given call for the admin dashboard's
+# LLM/STT/TTS debug view. See app/pipeline/recording.py.
+_TTS_LABELS = {
+    "rumik": "Rumik (mulberry)",
+    "sarvam": "Sarvam (bulbul:v3)",
+    "openai": "OpenAI (gpt-4o-mini-tts)",
+}
+
+
+def describe_tts(restaurant: Restaurant) -> str:
+    return _TTS_LABELS.get(restaurant.tts_provider, restaurant.tts_provider)

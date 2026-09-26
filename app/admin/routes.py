@@ -210,7 +210,7 @@ _CONFIDENCE_BADGES = {
 
 _COLUMNS = [
     "Call Time", "Caller", "Phone", "Topic", "Summary", "Outcome",
-    "Transcript", "Recording", "Reservation", "Confidence", "Escalation",
+    "Transcript", "Recording", "Reservation", "Confidence", "Escalation", "",
 ]
 
 
@@ -327,6 +327,16 @@ def _call_row_html(call: dict[str, Any]) -> str:
         else '<span class="badge badge-neutral">—</span>'
     )
 
+    providers_html = (
+        f'<button class="kebab-btn" onclick="showProviders(this)" '
+        f'data-caller="{caller_name}" '
+        f'data-llm="{escape(call.get("llm_provider", "") or "—")}" '
+        f'data-stt="{escape(call.get("stt_provider", "") or "—")}" '
+        f'data-tts="{escape(call.get("tts_provider", "") or "—")}" '
+        f'data-backfilled="{"1" if call.get("providers_backfilled") else ""}" '
+        f'title="Which LLM/STT/TTS handled this call" aria-label="Provider details">⋮</button>'
+    )
+
     return f"""<tr data-date="{iso_date}" data-outcome="{outcome_key}" data-confidence="{confidence_key}">
     <td class="nowrap">{duration_str}<br><span class="muted">{date_str} {time_str}</span></td>
     <td>{caller_name}</td>
@@ -339,6 +349,7 @@ def _call_row_html(call: dict[str, Any]) -> str:
     <td class="nowrap">{reservation_html}</td>
     <td>{confidence_html}</td>
     <td>{escalation_html}</td>
+    <td>{providers_html}</td>
   </tr>"""
 
 
@@ -490,6 +501,33 @@ def register_admin_routes(app: FastAPI) -> None:
   }}
   .link-btn:hover {{ text-decoration: underline; }}
 
+  .kebab-btn {{
+    background: none; border: 1px solid transparent; border-radius: 6px;
+    padding: 2px 8px; cursor: pointer; font-size: 1rem; line-height: 1.4;
+    color: var(--text-muted);
+  }}
+  .kebab-btn:hover {{ background: var(--bg-alt); border-color: var(--border); color: #1a1a1a; }}
+
+  #providers-overlay {{
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+    align-items: center; justify-content: center; z-index: 100; padding: 2rem;
+  }}
+  #providers-box {{
+    background: #fff; border-radius: 10px; max-width: 380px; width: 100%;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+  }}
+  #providers-note {{
+    margin: 10px 18px 0; padding: 8px 10px; border-radius: 6px;
+    background: #fef9c3; color: #854d0e; font-size: 0.78rem;
+  }}
+  .providers-row {{
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 0.88rem;
+  }}
+  .providers-row:last-child {{ border-bottom: none; }}
+  .providers-row span:first-child {{ color: var(--text-muted); }}
+  .providers-row span:last-child {{ font-weight: 600; text-align: right; }}
+
   #modal-overlay {{
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45);
     align-items: center; justify-content: center; z-index: 100; padding: 2rem;
@@ -558,6 +596,19 @@ def register_admin_routes(app: FastAPI) -> None:
     </div>
   </div>
 
+  <div id="providers-overlay" onclick="if (event.target === this) closeProviders()">
+    <div id="providers-box">
+      <div id="modal-header">
+        <h3 id="providers-title">Providers</h3>
+        <button id="providers-close" onclick="closeProviders()" aria-label="Close">&times;</button>
+      </div>
+      <div id="providers-note" style="display:none"></div>
+      <div class="providers-row"><span>LLM</span><span id="providers-llm"></span></div>
+      <div class="providers-row"><span>STT</span><span id="providers-stt"></span></div>
+      <div class="providers-row"><span>TTS</span><span id="providers-tts"></span></div>
+    </div>
+  </div>
+
   <script>
     function showTranscript(btn) {{
       document.getElementById('modal-title').textContent = 'Transcript — ' + btn.getAttribute('data-caller');
@@ -567,8 +618,25 @@ def register_admin_routes(app: FastAPI) -> None:
     function closeModal() {{
       document.getElementById('modal-overlay').style.display = 'none';
     }}
+    function showProviders(btn) {{
+      document.getElementById('providers-title').textContent = 'Providers — ' + btn.getAttribute('data-caller');
+      document.getElementById('providers-llm').textContent = btn.getAttribute('data-llm');
+      document.getElementById('providers-stt').textContent = btn.getAttribute('data-stt');
+      document.getElementById('providers-tts').textContent = btn.getAttribute('data-tts');
+      var note = document.getElementById('providers-note');
+      if (btn.getAttribute('data-backfilled')) {{
+        note.textContent = '⚠ Backfilled from deployment defaults — not captured live for this call.';
+        note.style.display = 'block';
+      }} else {{
+        note.style.display = 'none';
+      }}
+      document.getElementById('providers-overlay').style.display = 'flex';
+    }}
+    function closeProviders() {{
+      document.getElementById('providers-overlay').style.display = 'none';
+    }}
     document.addEventListener('keydown', function(e) {{
-      if (e.key === 'Escape') closeModal();
+      if (e.key === 'Escape') {{ closeModal(); closeProviders(); }}
     }});
 
     (function() {{

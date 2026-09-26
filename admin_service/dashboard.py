@@ -242,6 +242,14 @@ tbody tr:hover td { background: var(--surface-2); }
 .turn-caller { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 .turn-bot { align-self: flex-end; background: var(--accent-soft); border: 1px solid var(--accent-soft-border); color: var(--ink); border-bottom-right-radius: 4px; }
 
+.kebab-btn { background: none; border: 1px solid transparent; border-radius: 8px; padding: 3px 9px; font-size: 1rem; line-height: 1.3; cursor: pointer; color: var(--muted); }
+.kebab-btn:hover { background: var(--surface-2); border-color: var(--border); color: var(--ink); }
+.providers-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 0.88rem; }
+.providers-row:last-child { border-bottom: none; }
+.providers-label { color: var(--muted); }
+.providers-row span:last-child { font-weight: 600; text-align: right; }
+.providers-note { background: var(--tint-amber); color: var(--tint-amber-ink); border-radius: 8px; padding: 8px 11px; font-size: 0.78rem; margin-bottom: 4px; }
+
 /* legacy pieces still used by the home + super-admin pages */
 .tiles { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 1.5rem; }
 .tile { background: var(--surface); border-radius: 10px; box-shadow: var(--shadow); padding: 14px 18px; min-width: 140px; border: 1px solid var(--border); }
@@ -567,6 +575,16 @@ def render_call_row(call: dict[str, Any]) -> str:
         else '<span class="badge badge-neutral">—</span>'
     )
 
+    providers_html = (
+        '<button type="button" class="kebab-btn view-providers" '
+        f'data-caller="{caller_label}" data-when="{when_label}" '
+        f'data-llm="{escape(call.get("llm_provider", "") or "—")}" '
+        f'data-stt="{escape(call.get("stt_provider", "") or "—")}" '
+        f'data-tts="{escape(call.get("tts_provider", "") or "—")}" '
+        f'data-backfilled="{"1" if call.get("providers_backfilled") else ""}" '
+        'title="Which LLM/STT/TTS handled this call" aria-label="Provider details">&#8942;</button>'
+    )
+
     return f"""<tr data-date="{iso_date}" data-ts="{ts_attr}" data-duration="{duration_attr}" data-outcome="{outcome_key}" data-confidence="{confidence_key}" data-escalation="{escalation_key}" data-topics="{topics_attr}">
     <td class="nowrap">{date_str} {time_str}</td>
     <td><div class="caller-name">{escape(call["caller_name"] or "—")}</div><div class="caller-phone">{escape(call["caller_phone"] or "—")}</div></td>
@@ -576,6 +594,7 @@ def render_call_row(call: dict[str, Any]) -> str:
     <td>{transcript_html}</td>
     <td><span class="badge {conf_class}">{conf_label}</span></td>
     <td>{escalation_badge}</td>
+    <td>{providers_html}</td>
   </tr>"""
 
 
@@ -683,6 +702,27 @@ _FILTER_DRAWER = """
     <div class="modal-body" id="recording-body"></div>
     <div class="modal-foot">
       <button class="btn btn-ghost" id="recording-close-2">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-scrim" id="providers-scrim">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="providers-title" style="width:min(400px,100%)">
+    <div class="modal-head">
+      <div>
+        <h3 id="providers-title">Providers</h3>
+        <div class="modal-meta" id="providers-meta"></div>
+      </div>
+      <button class="btn btn-ghost" id="providers-close" aria-label="Close providers">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="providers-note" id="providers-note" hidden></div>
+      <div class="providers-row"><span class="providers-label">LLM</span><span id="providers-llm"></span></div>
+      <div class="providers-row"><span class="providers-label">STT</span><span id="providers-stt"></span></div>
+      <div class="providers-row"><span class="providers-label">TTS</span><span id="providers-tts"></span></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="providers-close-2">Close</button>
     </div>
   </div>
 </div>
@@ -992,11 +1032,32 @@ _FILTER_SCRIPT = """
     recordingBody.innerHTML = '';
   }
 
+  var providersScrim = document.getElementById('providers-scrim');
+  var providersMeta = document.getElementById('providers-meta');
+  var providersNote = document.getElementById('providers-note');
+
+  function openProviders(btn) {
+    providersMeta.textContent = btn.getAttribute('data-caller') + ' \\u00b7 ' + btn.getAttribute('data-when');
+    document.getElementById('providers-llm').textContent = btn.getAttribute('data-llm');
+    document.getElementById('providers-stt').textContent = btn.getAttribute('data-stt');
+    document.getElementById('providers-tts').textContent = btn.getAttribute('data-tts');
+    if (btn.getAttribute('data-backfilled')) {
+      providersNote.textContent = '\\u26a0 Backfilled from deployment defaults \\u2014 not captured live for this call.';
+      providersNote.hidden = false;
+    } else {
+      providersNote.hidden = true;
+    }
+    providersScrim.classList.add('open');
+  }
+  function closeProviders() { providersScrim.classList.remove('open'); }
+
   tbody.addEventListener('click', function(e) {
     var transcriptBtn = e.target.closest('.view-transcript');
     if (transcriptBtn) { openTranscript(transcriptBtn); return; }
     var recordingBtn = e.target.closest('.view-recording');
     if (recordingBtn) { openRecording(recordingBtn); return; }
+    var providersBtn = e.target.closest('.view-providers');
+    if (providersBtn) { openProviders(providersBtn); return; }
   });
   document.getElementById('modal-close').addEventListener('click', closeTranscript);
   document.getElementById('modal-close-2').addEventListener('click', closeTranscript);
@@ -1004,11 +1065,15 @@ _FILTER_SCRIPT = """
   document.getElementById('recording-close').addEventListener('click', closeRecording);
   document.getElementById('recording-close-2').addEventListener('click', closeRecording);
   recordingScrim.addEventListener('click', function(e) { if (e.target === recordingScrim) closeRecording(); });
+  document.getElementById('providers-close').addEventListener('click', closeProviders);
+  document.getElementById('providers-close-2').addEventListener('click', closeProviders);
+  providersScrim.addEventListener('click', function(e) { if (e.target === providersScrim) closeProviders(); });
   document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape') return;
     closeDrawer();
     closeTranscript();
     closeRecording();
+    closeProviders();
   });
 
   if (rows.length) applyFilters();
@@ -1018,7 +1083,7 @@ _FILTER_SCRIPT = """
 
 
 def render_call_table(calls: list[dict[str, Any]], stats: dict[str, Any]) -> str:
-    columns = ["Call time", "Caller", "Topic", "Outcome", "Recording", "Transcript", "Confidence", "Escalation"]
+    columns = ["Call time", "Caller", "Topic", "Outcome", "Recording", "Transcript", "Confidence", "Escalation", ""]
     header = "".join(f"<th>{c}</th>" for c in columns)
     rows = "".join(render_call_row(c) for c in calls) or (
         f"<tr><td colspan='{len(columns)}'><div class='empty-note'>No calls logged yet.</div></td></tr>"
