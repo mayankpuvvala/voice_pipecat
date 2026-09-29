@@ -2,6 +2,8 @@
 is one of exotel/twilio/telnyx/plivo/vobiz — see README.md for the
 TELEPHONY_TRANSPORT env var and the Jio → Exotel → this server call path.
 Vobiz auto-detects as "plivo" and is routed via `_create_vobiz_transport()`.
+Real Plivo is wire-identical to Vobiz but needs opposite keepCallAlive/
+auto_hang_up behavior — see /plivo-answer and `_create_plivo_transport()`.
 """
 
 from __future__ import annotations
@@ -208,6 +210,37 @@ async def vobiz_hangup(request: Request) -> Response:
         form.get("HangupCause"),
     )
     return Response(content="OK", media_type="text/plain")
+
+
+@runner_app.post("/plivo-answer", include_in_schema=False)
+async def plivo_answer(request: Request) -> Response:
+    """Real Plivo's answer URL — separate from Vobiz's /answer above.
+
+    Unlike Vobiz, real Plivo hangs the call up almost immediately when
+    keepCallAlive="false" and there's no XML element after <Stream> (empirically
+    confirmed: two back-to-back /ws connections that each closed in ~290ms with
+    no handshake message, matching Plivo's documented "retries twice, ~290ms
+    apart, then gives up" behavior). keepCallAlive="true" fixes that but means
+    our own WebSocket close no longer ends the call — see _create_plivo_transport
+    for the real hang-up call this requires instead. The `provider=plivo` query
+    param is how bot() tells this apart from a Vobiz connection, since the two
+    are otherwise wire-identical.
+    """
+    form = await request.form()
+    caller = str(form.get("From", "") or "")
+    called = str(form.get("To", "") or "")
+    ws_url = (
+        f"wss://{request.headers.get('host')}/ws"
+        f"?from={quote(caller)}&amp;to={quote(called)}&amp;provider=plivo"
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        '<Stream bidirectional="true" keepCallAlive="true" '
+        f'contentType="audio/x-mulaw;rate=8000">{ws_url}</Stream>'
+        "</Response>"
+    )
+    return Response(content=xml, media_type="application/xml")
 
 
 # Once per process, not per call — a second setup_tracing() call can't
@@ -497,6 +530,31 @@ def _create_vobiz_transport(runner_args: WebSocketRunnerArguments, call_data) ->
     return FastAPIWebsocketTransport(websocket=runner_args.websocket, params=params)
 
 
+def _create_plivo_transport(runner_args: WebSocketRunnerArguments, call_data) -> BaseTransport:
+    """Build the transport for a real Plivo call (see /plivo-answer).
+
+    Unlike Vobiz, this needs auto_hang_up=True with real Plivo credentials:
+    keepCallAlive="true" (required so real Plivo doesn't hang up before the
+    WebSocket even opens) means the call otherwise stays up after we close
+    our end.
+    """
+    query = runner_args.websocket.query_params
+    call_data.from_number = query.get("from") or call_data.from_number
+    call_data.to_number = query.get("to") or call_data.to_number
+    runner_args.call_data = call_data
+
+    params = FastAPIWebsocketParams(audio_in_enabled=True, audio_out_enabled=True)
+    params.add_wav_header = False
+    params.serializer = PlivoFrameSerializer(
+        stream_id=call_data.stream_id,
+        call_id=call_data.call_id,
+        auth_id=settings.plivo_auth_id,
+        auth_token=settings.plivo_auth_token,
+        params=PlivoFrameSerializer.InputParams(auto_hang_up=True),
+    )
+    return FastAPIWebsocketTransport(websocket=runner_args.websocket, params=params)
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Entry point the Pipecat dev runner looks for."""
     if isinstance(runner_args, WebSocketRunnerArguments) and runner_args.transport_type != "websocket":
@@ -506,7 +564,14 @@ async def bot(runner_args: RunnerArguments) -> None:
         detected_type, call_data = await parse_telephony_websocket(runner_args.websocket)
         if detected_type == "plivo":
             runner_args.transport_type = detected_type
-            transport = _create_vobiz_transport(runner_args, call_data)
+            # Vobiz and real Plivo are wire-identical here — /plivo-answer
+            # threads provider=plivo through the query string (same trick
+            # already used for from/to) since there's no other way to tell
+            # them apart at this point.
+            if runner_args.websocket.query_params.get("provider") == "plivo":
+                transport = _create_plivo_transport(runner_args, call_data)
+            else:
+                transport = _create_vobiz_transport(runner_args, call_data)
             await run_bot(transport, runner_args)
             return
 

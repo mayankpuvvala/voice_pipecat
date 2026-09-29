@@ -45,6 +45,14 @@ class Settings:
     rumik_api_key: str = os.environ.get("RUMIK_API_KEY", "")
     twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")
+
+    # Real Plivo (not Vobiz — see /plivo-answer and _create_plivo_transport
+    # in app/main.py) needs these to hang up via Plivo's REST API, since
+    # keepCallAlive="true" (required for the call to survive to begin with,
+    # see TROUBLESHOOTING.md) means closing our WebSocket no longer ends
+    # the call on its own the way it does for Vobiz.
+    plivo_auth_id: str = os.environ.get("PLIVO_AUTH_ID", "")
+    plivo_auth_token: str = os.environ.get("PLIVO_AUTH_TOKEN", "")
     # SMS-capable Twilio number for real-time human-escalation texts (see
     # twilio_client.send_sms). Leave unset and escalation SMS just stays off.
     twilio_sms_from_number: str = os.environ.get("TWILIO_SMS_FROM_NUMBER", "")
