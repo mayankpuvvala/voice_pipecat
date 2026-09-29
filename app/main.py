@@ -185,7 +185,7 @@ async def vobiz_answer(request: Request) -> Response:
     form = await request.form()
     caller = str(form.get("From", "") or "")
     called = str(form.get("To", "") or "")
-    ws_url = f"wss://{request.headers.get('host')}/ws?from={quote(caller)}&to={quote(called)}"
+    ws_url = f"wss://{request.headers.get('host')}/ws?from={quote(caller)}&amp;to={quote(called)}"
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
