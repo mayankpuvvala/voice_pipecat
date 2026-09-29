@@ -80,10 +80,27 @@ _ANALYSIS_TOOLS = [
 ]
 
 
+async def _create_chat_completion(client: AsyncOpenAI, **kwargs: object) -> object:
+    """Tries reasoning_effort='none' first, retries without it if this
+    account/model rejects the argument outright — same account-dependent
+    behavior app/main.py's own startup probe exists to handle (see
+    TROUBLESHOOTING.md), replicated locally rather than importing
+    app.main's private probe result (app.main imports this module, so the
+    reverse import would be circular). Same fix as app/admin/routes.py's
+    _openai_chat_completion."""
+    try:
+        return await client.chat.completions.create(reasoning_effort="none", **kwargs)
+    except Exception as e:
+        if "Unrecognized request argument supplied: reasoning_effort" in str(e):
+            return await client.chat.completions.create(**kwargs)
+        raise
+
+
 async def _analyze_transcript(transcript: str) -> dict[str, object] | None:
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     try:
-        response = await client.chat.completions.create(
+        response = await _create_chat_completion(
+            client,
             model=settings.openai_model,
             messages=[
                 {"role": "system", "content": _ANALYSIS_SYSTEM_PROMPT},
@@ -91,9 +108,6 @@ async def _analyze_transcript(transcript: str) -> dict[str, object] | None:
             ],
             tools=_ANALYSIS_TOOLS,
             tool_choice={"type": "function", "function": {"name": "record_call_analysis"}},
-            # gpt-5.6-luna 400s on function tools without this — see
-            # app/pipeline/logging_enforcer.py and TROUBLESHOOTING.md.
-            reasoning_effort="none",
         )
         tool_call = response.choices[0].message.tool_calls[0]
         return json.loads(tool_call.function.arguments)

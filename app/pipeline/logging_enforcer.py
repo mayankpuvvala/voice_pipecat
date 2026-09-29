@@ -72,6 +72,22 @@ _END_CALL_FOLLOWUP_PROMPT = (
 )
 
 
+async def _create_chat_completion(client: AsyncOpenAI, **kwargs: object) -> object:
+    """Tries reasoning_effort='none' first, retries without it if this
+    account/model rejects the argument outright — same account-dependent
+    behavior app/main.py's own startup probe exists to handle (see
+    TROUBLESHOOTING.md), replicated locally rather than importing
+    app.main's private probe result (app.main imports this module, so the
+    reverse import would be circular). Same fix as app/admin/routes.py's
+    _openai_chat_completion."""
+    try:
+        return await client.chat.completions.create(reasoning_effort="none", **kwargs)
+    except Exception as e:
+        if "Unrecognized request argument supplied: reasoning_effort" in str(e):
+            return await client.chat.completions.create(**kwargs)
+        raise
+
+
 class WorkerHandle:
     """Holds the PipelineWorker once it exists — the processor is built
     before the worker, so it can't take it directly in its constructor."""
@@ -209,14 +225,12 @@ class LogInteractionEnforcer(FrameProcessor):
             {"role": "assistant", "content": reply_text},
         ]
         try:
-            response = await self._openai_client.chat.completions.create(
+            response = await _create_chat_completion(
+                self._openai_client,
                 model=settings.openai_model,
                 messages=messages,
                 tools=_LOG_INTERACTION_TOOLS,
                 tool_choice={"type": "function", "function": {"name": "log_interaction"}},
-                # gpt-5.6-luna 400s on function tools without this (see
-                # app/main.py's _build_llm and TROUBLESHOOTING.md).
-                reasoning_effort="none",
             )
             tool_call = response.choices[0].message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
