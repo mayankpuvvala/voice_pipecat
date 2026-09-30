@@ -49,7 +49,7 @@ from app.pipeline.dynamic_prompt import DynamicPromptInjector
 from app.pipeline.idle_post_processor import idle_post_processing_loop
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
 from app.pipeline.prompts import build_system_prompt
-from app.pipeline.recording import save_call_recording
+from app.pipeline.recording import CallRecorder
 from app.pipeline.second_paragraph_filter import SecondParagraphFilter
 from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
@@ -214,6 +214,13 @@ async def vobiz_hangup(request: Request) -> Response:
 # override the global TracerProvider the first one already installed.
 _TRACING_ENABLED = setup_call_tracing()
 
+# How much audio AudioBufferProcessor buffers before flushing to
+# CallRecorder (see the audiobuffer setup below). Bytes, not seconds, since
+# buffer_size doesn't know the call's sample rate up front — at telephony
+# rates (8-16kHz mono 16-bit) this is roughly 10-20s of audio per flush, a
+# reasonable trade-off between peak memory and flush frequency.
+_RECORDING_FLUSH_BYTES = 320_000
+
 
 @runner_app.on_event("startup")
 async def _configure_log_verbosity() -> None:
@@ -373,7 +380,7 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
     # built, so the Recordings row always reflects what THIS call actually
     # used -- not whatever the config happens to say by the time the call
     # ends (restaurant/env config can change between calls). See
-    # app.pipeline.recording.save_call_recording's docstring.
+    # app.pipeline.recording.CallRecorder's docstring.
     llm_provider_label = _describe_llm()
     stt_provider_label = describe_stt(ACTIVE_RESTAURANT)
     tts_provider_label = describe_tts(ACTIVE_RESTAURANT)
@@ -391,7 +398,16 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
         context=context, restaurant=ACTIVE_RESTAURANT, llm=llm
     )
 
-    audiobuffer = AudioBufferProcessor(auto_start_recording=True)
+    # buffer_size makes AudioBufferProcessor flush on_audio_data periodically
+    # instead of only once at call end — without it the processor holds the
+    # entire call's raw PCM in memory for the whole call, which spiked
+    # process memory (and crashed the deploy) on longer/concurrent calls.
+    # CallRecorder streams each flushed chunk straight to disk (see
+    # app.pipeline.recording) so peak memory stays bounded regardless of
+    # call length or how many calls are active at once.
+    audiobuffer = AudioBufferProcessor(
+        auto_start_recording=True, buffer_size=_RECORDING_FLUSH_BYTES
+    )
 
     pipeline = Pipeline(
         [
@@ -411,19 +427,21 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
         ]
     )
 
+    call_recorder = CallRecorder(
+        call_session_id,
+        caller_phone,
+        llm_provider=llm_provider_label,
+        stt_provider=stt_provider_label,
+        tts_provider=tts_provider_label,
+    )
+
     @audiobuffer.event_handler("on_audio_data")
     async def on_audio_data(buffer, audio, sample_rate, num_channels):
-        await save_call_recording(
-            call_session_id,
-            caller_phone,
-            audio,
-            sample_rate,
-            num_channels,
-            transcript=call_state["transcript"],
-            llm_provider=llm_provider_label,
-            stt_provider=stt_provider_label,
-            tts_provider=tts_provider_label,
-        )
+        await call_recorder.add_chunk(audio, sample_rate, num_channels)
+
+    @audiobuffer.event_handler("on_recording_stopped")
+    async def on_recording_stopped(buffer):
+        await call_recorder.finalize(call_state["transcript"])
 
     worker = PipelineWorker(
         pipeline,
@@ -460,7 +478,7 @@ async def _run_bot_impl(transport: BaseTransport, runner_args: RunnerArguments) 
         # (cancel_on_idle_timeout defaults to True) — none of the app's own
         # call-ending paths (on_client_disconnected, end_call, CallHealth
         # degrade) run for this one, so without this handler
-        # save_call_recording() logs the call with an empty Transcript
+        # call_recorder.finalize() logs the call with an empty Transcript
         # despite a real recording/duration.
         logger.info("Pipeline idle timeout — capturing transcript before worker cancels")
         capture_transcript()

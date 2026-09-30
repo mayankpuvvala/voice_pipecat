@@ -11,11 +11,9 @@ must be awaited via `asyncio.to_thread(...)` from call sites.
 
 from __future__ import annotations
 
-import io
-
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaFileUpload
 
 from app.config.settings import settings
 
@@ -69,13 +67,14 @@ def _get_or_create_folder(service) -> str:
     return _folder_id_cache
 
 
-def upload_recording(filename: str, wav_bytes: bytes) -> str:
-    """Upload a WAV recording to a "Call Recordings" folder in the
-    authorized account's own Drive (created on first use), return its
+def upload_recording(filename: str, file_path: str) -> str:
+    """Upload a WAV recording (read from disk, not memory — see
+    app.pipeline.recording.CallRecorder) to a "Call Recordings" folder in
+    the authorized account's own Drive (created on first use), return its
     Drive view link."""
     service = _client()
     folder_id = _get_or_create_folder(service)
-    media = MediaIoBaseUpload(io.BytesIO(wav_bytes), mimetype="audio/wav", resumable=False)
+    media = MediaFileUpload(file_path, mimetype="audio/wav", resumable=False)
     file = (
         service.files()
         .create(

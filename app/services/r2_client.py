@@ -27,19 +27,22 @@ def _client():
     )
 
 
-def upload_recording(filename: str, wav_bytes: bytes) -> str:
-    """Upload a WAV recording to the configured bucket.
+def upload_recording(filename: str, file_path: str) -> str:
+    """Upload a WAV recording (read from disk, not memory — see
+    app.pipeline.recording.CallRecorder) to the configured bucket.
 
     Returns the public URL if R2_PUBLIC_URL_BASE is configured, otherwise
     just the bare object key (filename) as a reference — still valid for
     cross-checking against the bucket directly, just not clickable.
     """
     client = _client()
-    client.put_object(
-        Bucket=settings.r2_bucket_name,
-        Key=filename,
-        Body=wav_bytes,
-        ContentType="audio/wav",
+    # upload_file streams the object from disk in chunks (boto3's S3Transfer)
+    # instead of loading the whole recording into memory first.
+    client.upload_file(
+        file_path,
+        settings.r2_bucket_name,
+        filename,
+        ExtraArgs={"ContentType": "audio/wav"},
     )
     if settings.r2_public_url_base:
         return f"{settings.r2_public_url_base.rstrip('/')}/{filename}"
