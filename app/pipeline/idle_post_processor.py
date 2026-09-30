@@ -97,23 +97,32 @@ async def _create_chat_completion(client: AsyncOpenAI, **kwargs: object) -> obje
 
 
 async def _analyze_transcript(transcript: str) -> dict[str, object] | None:
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
-    try:
-        response = await _create_chat_completion(
-            client,
-            model=settings.openai_model,
-            messages=[
-                {"role": "system", "content": _ANALYSIS_SYSTEM_PROMPT},
-                {"role": "user", "content": transcript},
-            ],
-            tools=_ANALYSIS_TOOLS,
-            tool_choice={"type": "function", "function": {"name": "record_call_analysis"}},
-        )
-        tool_call = response.choices[0].message.tool_calls[0]
-        return json.loads(tool_call.function.arguments)
-    except Exception:
-        logger.exception("idle_post_processor: transcript analysis failed")
-        return None
+    # async with closes the client's underlying httpx connection pool when
+    # done -- without it, this leaks one unclosed AsyncOpenAI/httpx client
+    # per call, every _POLL_INTERVAL_SECS, forever. Normally that's a slow
+    # leak; it becomes a fast one when _pending_rows() keeps re-selecting
+    # the same calls tick after tick (see this module's docstring on the
+    # Recordings sheet's missing PostConfidence/Escalated/PostProcessedAt
+    # columns) -- confirmed live: production memory climbed to ~98% of a
+    # 1GB limit at CPU idle, with the same handful of call IDs reprocessed
+    # every single tick in the logs.
+    async with AsyncOpenAI(api_key=settings.openai_api_key) as client:
+        try:
+            response = await _create_chat_completion(
+                client,
+                model=settings.openai_model,
+                messages=[
+                    {"role": "system", "content": _ANALYSIS_SYSTEM_PROMPT},
+                    {"role": "user", "content": transcript},
+                ],
+                tools=_ANALYSIS_TOOLS,
+                tool_choice={"type": "function", "function": {"name": "record_call_analysis"}},
+            )
+            tool_call = response.choices[0].message.tool_calls[0]
+            return json.loads(tool_call.function.arguments)
+        except Exception:
+            logger.exception("idle_post_processor: transcript analysis failed")
+            return None
 
 
 def _pending_rows() -> list[tuple[int, dict[str, str]]]:
