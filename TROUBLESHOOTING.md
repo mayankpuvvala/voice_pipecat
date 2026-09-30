@@ -401,6 +401,103 @@ file finalize already uploaded and deleted.
 
 ---
 
+## Same OOM kill, still happening after the fix above — real root cause was sheets_client (2026-09-30)
+
+**The recording fix above was real but incomplete.** Production OOM-killed
+twice more the same afternoon, after that fix was live, with **zero real
+call traffic** in either case (confirmed via `railway get-logs --types
+deploy,http`: `http: []` for the deployment's entire ~11-minute life, only
+`idle_post_processor` activity in the deploy stream). Whatever was leaking
+had nothing to do with calls or recordings at all.
+
+**First two patches, both real but not the actual cause.** Chased two
+unclosed-`AsyncOpenAI`-client leaks in sequence — `idle_post_processor.py`
+(one leaked client per stuck call, every 60s tick, forever — see this
+module's own docstring on why the same 5 calls keep retrying: the
+Recordings sheet is missing `PostConfidence`/`Escalated`/`PostProcessedAt`)
+and then `logging_enforcer.py`/`transcript.py`/`admin/routes.py` (one
+leaked client per real call or health-check). Both fixes were correct and
+worth keeping, but production still OOM-killed a third time after both
+landed — proof they weren't the dominant leak. **Lesson: "found an unclosed
+client, fixed it, memory looked stable for N minutes" is not confirmation
+— Python's allocator plateaus after warm-up regardless of whether the real
+leak is fixed, and this exact pattern (looks stable, then climbs again over
+the next hour) repeated three times before the actual cause was found.**
+
+**Root-caused by reproducing the exact deployed code locally**, not by more
+code reading: `import app.pipeline.idle_post_processor as ipp`, then
+`gc.disable()` + `gc.set_debug(gc.DEBUG_SAVEALL)` before calling
+`await ipp.run_idle_post_processing_once()` once. One tick (6 calls into
+`sheets_client` — one `read_rows` + up to 5 `update_cells`) left **~10,494
+unreachable objects** needing cyclic GC to reclaim: `Resource`,
+`ResourceMethodParameters`, `Schemas`, `Http`, `AuthorizedHttp`,
+`Credentials`, `SSLSocket`, `HTTPResponse` — all `googleapiclient`/
+`httplib2` internals. `sheets_client._client()` called
+`googleapiclient.discovery.build()` fresh on **every single call**. A built
+`Resource` is a dynamically-constructed web of bound methods that reference
+the `Resource` itself back — a deliberate, if GC-unfriendly, part of how
+`google-api-python-client` works. Simple refcounting can't free a
+self-referential cycle; only `gc.collect()` can, and it only runs
+automatically once an allocation-count threshold is crossed. Confirmed the
+mechanism directly: the identical first tick left **68,618 net new
+objects** when GC ran normally vs. only ~35MB/~108MB RSS when a
+`gc.collect()` was forced immediately after — production's low, sparse
+call volume (one tick every 60s, a handful of calls each) apparently
+doesn't cross that automatic threshold fast enough to keep up, so the
+cyclic garbage from `sheets_client` just accumulated tick after tick until
+the container hit its memory limit.
+
+**Why this wasn't caught by an earlier, naive test of `sheets_client`
+itself**: an initial local repro called `_client()` + `read_rows()` in a
+loop with `gc.collect()` forced after every iteration — which is exactly
+what masked the leak (forcing collection every time reclaims the cycles
+immediately, so nothing appears to accumulate). Only removing the forced
+collection and letting Python's normal, threshold-based automatic GC
+schedule apply reproduced the real behavior. If re-investigating a memory
+issue like this again: reproduce with the *actual* GC behavior the
+process will really run under, not a forced-clean-after-every-step
+version of the same code — a test that manually cleans up after itself is
+not testing what production does.
+
+**Fix.** `sheets_client._client()` now caches the built `Resource` in a
+`threading.local()` instead of rebuilding it every call. The seemingly
+obvious fix — just cache it as one shared module-level object — was
+deliberately avoided years earlier per this file's own comment: a built
+`Resource` wraps one `httplib2.Http` connection, and sharing that across
+concurrent threads caused real SSL errors before. `threading.local()` gets
+both: every call from the same thread reuses one `Resource` (no more
+rebuild-every-call cycle churn), while different threads still never share
+a connection (`sheets_client`'s callers mix direct synchronous calls —
+`idle_post_processor.py` always calls from the event loop thread — with
+`asyncio.to_thread` callers drawn from a bounded, reused thread pool, so
+this stays a small, fixed number of cached `Resource` objects either way,
+never one-per-call and never one-shared-across-everything).
+
+**Verified empirically, before and after, against the real code path**
+(not just "looks stable for a few minutes" — see the lesson above):
+steady-state per-tick object churn (`gc.collect()`'s reclaimed count,
+measured with `gc.disable()` so nothing gets cleaned up automatically
+mid-measurement) dropped from 68,618 to a flat, non-growing 4,173 objects
+per tick — a 94% reduction, and confirmed the cached `Resource`'s `id()`
+stays identical across repeated ticks (proving reuse, not just a smaller
+leak). The remaining ~4,150/tick is normal OpenAI/httpx per-call object
+lifecycle (already properly closed via the earlier `async with` fixes),
+bounded and non-accumulating.
+
+**Underlying issue still worth fixing separately**: `idle_post_processor.py`
+calls `sheets_client.read_rows`/`update_cells` directly, not via
+`asyncio.to_thread` like every other caller in this codebase (see this
+module's docstring: "every public function here must be awaited via
+`asyncio.to_thread(...)`") — meaning these blocking network calls run
+directly on the event loop thread during every idle tick, which could
+stall real call audio processing if a real call happened to be starting at
+the exact moment a tick fires. Not yet fixed (out of scope for the memory
+investigation), and gated in practice by `active_calls.is_idle()` only
+firing once genuinely idle, but worth closing since it's a footgun for
+whoever adds a shorter `_MIN_IDLE_SECS` later.
+
+---
+
 ## Rumik TTS wallet ran dry mid-call → switched default TTS to Deepgram Flux (2026-09-30)
 
 **Cause.** Rumik TTS (the default `tts_provider` for both restaurants)
