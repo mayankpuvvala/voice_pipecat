@@ -8,6 +8,7 @@ so it never stalls audio on a live call.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from google.oauth2 import service_account
@@ -17,10 +18,25 @@ from app.config.settings import settings
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Only credentials are cached, not the `service`/HTTP connection — that
-# object shares one non-thread-safe httplib2 connection, which caused real
-# SSL errors under concurrent writes.
 _credentials = None
+# googleapiclient's built Resource wraps one httplib2.Http connection, which
+# isn't safe to share across threads (confirmed live: real SSL errors under
+# concurrent writes when this was a single shared service). But a Resource
+# is also expensive to throw away -- build() dynamically constructs it from
+# the API's discovery doc into a web of bound methods that reference the
+# Resource itself, forming reference cycles only the cyclic GC can reclaim
+# (confirmed live: one idle_post_processor tick -- 6 calls here -- left
+# ~10k unreachable-until-collected objects; production's low, sparse call
+# volume didn't trigger automatic gen-2 collection often enough to keep up,
+# and memory climbed to the container's OOM limit within minutes). A
+# thread-local cache gets both: every call from the same thread reuses one
+# Resource (no repeated cycle-churn), while different threads still never
+# share a connection (this module's callers mix direct synchronous calls
+# from whatever thread they're on -- e.g. idle_post_processor.py always
+# calls from the event loop thread -- with asyncio.to_thread callers drawn
+# from a bounded, reused pool, so "one Resource per thread that's ever
+# called this" stays a small, fixed number either way).
+_thread_local = threading.local()
 
 
 def _client():
@@ -33,7 +49,9 @@ def _client():
             "token_uri": "https://oauth2.googleapis.com/token",
         }
         _credentials = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
-    return build("sheets", "v4", credentials=_credentials, cache_discovery=False)
+    if not hasattr(_thread_local, "service"):
+        _thread_local.service = build("sheets", "v4", credentials=_credentials, cache_discovery=False)
+    return _thread_local.service
 
 
 def append_row(sheet_name: str, row: dict[str, Any]) -> None:
