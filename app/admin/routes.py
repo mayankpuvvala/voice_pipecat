@@ -64,14 +64,14 @@ async def _check_llm() -> dict[str, Any]:
         return {"ok": False, "error": "OPENAI_API_KEY not set"}
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
     try:
-        resp = await _openai_chat_completion(
-            client,
-            model=settings.openai_model,
-            messages=[{"role": "user", "content": "Reply with exactly one word: ok"}],
-            max_completion_tokens=5,
-        )
+        async with AsyncOpenAI(api_key=settings.openai_api_key) as client:
+            resp = await _openai_chat_completion(
+                client,
+                model=settings.openai_model,
+                messages=[{"role": "user", "content": "Reply with exactly one word: ok"}],
+                max_completion_tokens=5,
+            )
         return {"ok": True, "model": settings.openai_model, "reply": resp.choices[0].message.content}
     except Exception as e:
         return {"ok": False, "model": settings.openai_model, "error": f"{type(e).__name__}: {e}"}
@@ -87,16 +87,16 @@ async def _check_tool_calling() -> dict[str, Any]:
         return {"ok": False, "error": "OPENAI_API_KEY not set"}
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
     try:
-        resp = await _openai_chat_completion(
-            client,
-            model=settings.openai_model,
-            messages=[{"role": "user", "content": "call the tool now"}],
-            tools=_PROBE_TOOLS,
-            tool_choice="required",
-            max_completion_tokens=50,
-        )
+        async with AsyncOpenAI(api_key=settings.openai_api_key) as client:
+            resp = await _openai_chat_completion(
+                client,
+                model=settings.openai_model,
+                messages=[{"role": "user", "content": "call the tool now"}],
+                tools=_PROBE_TOOLS,
+                tool_choice="required",
+                max_completion_tokens=50,
+            )
         tool_calls = resp.choices[0].message.tool_calls or []
         called = any(tc.function.name == "_health_probe_tool" for tc in tool_calls)
         return {"ok": called, "tool_calls_returned": len(tool_calls)}
@@ -174,14 +174,14 @@ async def _check_tts() -> dict[str, Any]:
         try:
             from openai import AsyncOpenAI
 
-            oai = AsyncOpenAI(api_key=settings.openai_api_key)
-            async with oai.audio.speech.with_streaming_response.create(
-                model="tts-1",
-                voice=settings.openai_tts_voice,
-                input="test",
-                response_format="pcm",
-            ) as resp:
-                nbytes = sum([len(chunk) async for chunk in resp.iter_bytes()])
+            async with AsyncOpenAI(api_key=settings.openai_api_key) as oai:
+                async with oai.audio.speech.with_streaming_response.create(
+                    model="tts-1",
+                    voice=settings.openai_tts_voice,
+                    input="test",
+                    response_format="pcm",
+                ) as resp:
+                    nbytes = sum([len(chunk) async for chunk in resp.iter_bytes()])
             results["openai_fallback"] = {"ok": nbytes > 0, "bytes": nbytes}
         except Exception as e:
             results["openai_fallback"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}

@@ -120,7 +120,6 @@ class LogInteractionEnforcer(FrameProcessor):
         self._worker_handle = worker_handle
         self._call_session_id = call_session_id
         self._caller_phone = caller_phone
-        self._openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
         self._tool_call_seen = False
         # Persists across the silent tool-call-only rounds of a multi-round
         # transaction (check_availability -> log_interaction -> final spoken
@@ -225,13 +224,23 @@ class LogInteractionEnforcer(FrameProcessor):
             {"role": "assistant", "content": reply_text},
         ]
         try:
-            response = await _create_chat_completion(
-                self._openai_client,
-                model=settings.openai_model,
-                messages=messages,
-                tools=_LOG_INTERACTION_TOOLS,
-                tool_choice={"type": "function", "function": {"name": "log_interaction"}},
-            )
+            # Scoped to this one call instead of a shared self._openai_client
+            # -- this fires as an un-awaited background task (see
+            # process_frame's create_task call below), so a client living on
+            # `self` for the whole call would leak (no cleanup() hook runs
+            # until pipeline teardown) and closing it there could race an
+            # still-in-flight backfill from right before hangup. One client
+            # per invocation sidesteps both. Confirmed live: this was the
+            # actual source of production's OOM kills, not the initially
+            # fixed idle_post_processor leak -- see TROUBLESHOOTING.md.
+            async with AsyncOpenAI(api_key=settings.openai_api_key) as client:
+                response = await _create_chat_completion(
+                    client,
+                    model=settings.openai_model,
+                    messages=messages,
+                    tools=_LOG_INTERACTION_TOOLS,
+                    tool_choice={"type": "function", "function": {"name": "log_interaction"}},
+                )
             tool_call = response.choices[0].message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
         except Exception:

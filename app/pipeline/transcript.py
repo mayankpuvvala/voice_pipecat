@@ -59,17 +59,17 @@ async def generate_call_summary(transcript: str) -> str:
     if not transcript.strip():
         return ""
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
-        response = await client.chat.completions.create(
-            model=settings.openai_model,
-            messages=[
-                {"role": "system", "content": _SUMMARY_PROMPT},
-                {"role": "user", "content": transcript},
-            ],
-            # max_tokens (not max_completion_tokens) 400s on gpt-5.6-luna --
-            # confirmed live 2026-09-19, see TROUBLESHOOTING.md.
-            max_completion_tokens=120,
-        )
+        async with AsyncOpenAI(api_key=settings.openai_api_key) as client:
+            response = await client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {"role": "system", "content": _SUMMARY_PROMPT},
+                    {"role": "user", "content": transcript},
+                ],
+                # max_tokens (not max_completion_tokens) 400s on gpt-5.6-luna --
+                # confirmed live 2026-09-19, see TROUBLESHOOTING.md.
+                max_completion_tokens=120,
+            )
         return (response.choices[0].message.content or "").strip()
     except Exception:
         logger.exception("Failed to generate call summary")
