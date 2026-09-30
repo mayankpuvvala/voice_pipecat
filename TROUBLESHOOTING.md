@@ -563,6 +563,43 @@ run through pipecat's synthetic test harness, not an actual phone call.
 Place one real test call before fully trusting pronunciation/barge-in
 behavior on this voice.
 
+**Update, same day — the real test call found a real bug.** First live
+Plivo call against `flux-naveen-en` reported audio "breaking"/crackling.
+Deploy logs pinpointed one concrete, fixable cause: `TTSUpdateSettingsFrame`
+land on this line
+```
+DeepgramFluxTTSService#0: updated settings fields: {'language'}
+```
+immediately followed by
+```
+Disconnecting from Deepgram Flux WebSocket
+Connecting to Deepgram Flux WebSocket
+```
+— a full WebSocket teardown/rebuild, mid-call, right as the bot was about
+to speak. `TTSLanguageSwitcher` (`app/pipeline/tts_language_switcher.py`)
+pushes a language `Settings` update on every language switch, for
+whichever TTS provider is active, on the documented assumption that
+providers which don't need it just ignore the field. True for Rumik/
+OpenAI; **false for `DeepgramFluxTTSService`** — its `_update_settings`
+treats *any* changed field as a reason to reconnect
+(`if changed: await self._disconnect(); await self._connect()`), language
+included, even though Flux never reads language for synthesis at all.
+**Fixed**: `TTSLanguageSwitcher` now only pushes the update when the
+active TTS `isinstance(..., SarvamTTSService)` — the one provider that
+actually needs it — instead of relying on every other provider to no-op
+it safely.
+
+This explains the reconnect-triggered glitch at the exact moment of a
+language switch, not necessarily crackling audible for the whole call —
+if crackling was heard continuously rather than just at a language
+switch, that's a separate, still-open question: genuinely a Deepgram
+Flux (early access) audio-quality issue, or a Plivo-side artifact
+unrelated to which TTS vendor is active. Plivo's leg (8kHz, resampled
+from the pipeline's rate via `PlivoFrameSerializer`) is unchanged code
+from before this TTS switch — worth an A/B test call with `tts_provider`
+temporarily set to `"openai"` (no Rumik wallet dependency) on the exact
+same Plivo path before concluding which side it is.
+
 ---
 
 ## Deploy crash-loops (or 502s) right after a push

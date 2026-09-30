@@ -2,13 +2,16 @@
 app/config/restaurants/__init__.py's Restaurant.tts_provider docstring) —
 the one place that picks the TTS vendor.
 
-Rumik/Sarvam/OpenAI read Hindi/English code-mixed reply text straight from
-the script, no per-reply language switch required for correct pronunciation
-(TTSLanguageSwitcher, wired in app/main.py regardless of provider, still
-sends a language update every reply — Rumik, OpenAI, and Deepgram all
-ignore it since none of their Settings.language fields are read at
-synthesis time; see their own modules and pipecat's openai/tts.py. Only
-Sarvam actually acts on it):
+Rumik/Sarvam/OpenAI/Deepgram all read Hindi/English code-mixed reply text
+straight from the script, no per-reply language switch required for
+correct pronunciation. TTSLanguageSwitcher (app/pipeline/
+tts_language_switcher.py, wired in app/main.py regardless of provider)
+only actually pushes a language Settings update to SarvamTTSService now —
+Rumik/OpenAI safely ignore that field, but DeepgramFluxTTSService does
+NOT: any settings change, including one it never reads for synthesis,
+makes it tear down and rebuild its whole WebSocket connection. Confirmed
+live on a real Plivo call — see that module's docstring and
+TROUBLESHOOTING.md:
   - Rumik mulberry — natively code-mixed, see app/services/rumik_tts.py.
   - Sarvam bulbul:v3 — the language field IS read (target_language_code),
     which is exactly what TTSLanguageSwitcher exists to keep in sync.
