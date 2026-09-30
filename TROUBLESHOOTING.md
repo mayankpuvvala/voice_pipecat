@@ -349,6 +349,110 @@ switch.
 
 ---
 
+## Deploy OOM-killed under real call traffic (2026-09-30)
+
+**Cause.** `AudioBufferProcessor(auto_start_recording=True)` (`app/main.py`)
+defaulted to `buffer_size=0`, which means it holds a call's **entire** raw
+PCM audio (both user and bot tracks) in memory for the whole call and only
+flushes once, at call end. `app/pipeline/recording.py` then built a second
+full in-memory WAV copy (`io.BytesIO`), and both upload backends
+(`drive_oauth_client.py`, `r2_client.py`) took that full byte blob into
+memory a third time. Confirmed live: Railway's Memory graph showed a
+sawtooth climbing to 800MB+ per call cycle, and the actual deploy logs for
+the crashed container ended in a bare `Killed` line right before the
+process was replaced — a container-level OOM kill, not an application
+exception. Real caller impact: calls failing mid-conversation (reported via
+Plivo).
+
+**Check.** Railway → service → Metrics → Memory, "Last day" view — a
+climbing sawtooth pattern that resets on each restart, not a flat baseline,
+is the signature. In deploy logs, a `Killed` line with no preceding
+traceback (the OS killing the process, not the app crashing on its own)
+confirms it.
+
+**Fix.** `app/pipeline/recording.py`'s `CallRecorder` now streams flushed
+audio chunks straight to a temp `.wav` file on disk (`wave.Wave_write`,
+incremental `writeframes`) instead of accumulating the whole call in a
+Python `bytes` object. `AudioBufferProcessor` is now given
+`buffer_size=_RECORDING_FLUSH_BYTES` (320,000 bytes — roughly 10-20s of
+telephony audio) in `app/main.py` so it actually flushes periodically
+instead of once at call end. Both upload backends now take a file path and
+stream from disk (`MediaFileUpload` for Drive, boto3's `upload_file` for
+R2) instead of a full in-memory blob.
+
+**Gotcha hit while testing** (not obvious from reading pipecat's source
+without a live call): `_call_event_handler` in
+`pipecat/utils/base_object.py` does **not** await registered event handlers
+— unless registered with `sync=True`, each handler call is wrapped in
+`asyncio.create_task(...)` and never awaited by the caller. `on_audio_data`
+and the new `on_recording_stopped` handler are therefore independent,
+unordered background tasks, not a guaranteed sequence — `finalize()`
+(triggered by `on_recording_stopped`) could close the wave file while a
+still-in-flight `on_audio_data` chunk write was mid-write on a different
+thread (`asyncio.to_thread`). Caught live via a real crash: `AudioBuffer
+Processor#0: uncaught exception in event handler 'on_audio_data'
+(...wave.py:571): 'NoneType' object has no attribute 'write'`, surfaced
+while eval-testing scenario 17 against the Deepgram TTS switch below — not
+a Deepgram-specific bug, just the first time enough concurrent chunk
+traffic hit it. Fixed with an `asyncio.Lock` in `CallRecorder` shared
+between `add_chunk` and `finalize`, plus a `_closed` flag so a chunk that
+somehow arrives after finalize is dropped (logged) instead of reopening a
+file finalize already uploaded and deleted.
+
+---
+
+## Rumik TTS wallet ran dry mid-call → switched default TTS to Deepgram Flux (2026-09-30)
+
+**Cause.** Rumik TTS (the default `tts_provider` for both restaurants)
+started failing with `Rumik TTS error: {'error': True, 'code':
+'INSUFFICIENT_BALANCE', 'message': 'Insufficient wallet balance'}` —
+confirmed live in deploy logs and reproduced running the eval suite (8 of
+29 scenarios failed with this exact error once the wallet ran out partway
+through the run). There is no retry/fallback wrapper for TTS (see "Call
+ends abruptly with no apology" above) — an insufficient-balance error ends
+the call outright, same as any other TTS failure.
+
+**Fix.** Switched both restaurants' `tts_provider` to `"deepgram"` in
+`app/config/restaurants/{zero40,spice_route_kitchen}.py`. Deepgram's
+stable Aura-2 voice line has **no Indian English (en-IN) voices** — only
+American, British, Australian, Irish, and Filipino accents
+(developers.deepgram.com/docs/tts-models, checked directly). Their
+early-access **Flux** line does: `flux-naveen-en` ("Naveen"), an
+Indian-accented male voice (developers.deepgram.com/docs/flux-tts/voices).
+Wired via `pipecat.services.deepgram.flux.tts.DeepgramFluxTTSService` — a
+separate class/protocol from the stable `DeepgramTTSService` (Aura-2,
+`wss://api.deepgram.com/v1/speak`) already used nowhere in this repo. Flux
+uses `wss://api.deepgram.com/v2/speak` and has no persona/description knob
+like Rumik/OpenAI's `_VOICE_PERSONA` — the fixed voice is the whole steer.
+
+**Flux is early access** per pipecat's own `DeepgramFluxTTSService`
+docstring — "the voice catalog and parts of the protocol may change before
+general availability." If `flux-naveen-en` ever 404s or behaves
+differently, check Deepgram's current Flux voice list before assuming a
+code regression.
+
+**Check.** `DEEPGRAM_API_KEY` must be set on whichever Railway service runs
+the bot — it was **not** set at all on `voice_pipecat` in production when
+this switch was made (only used for STT before this, and no restaurant had
+`stt_provider="deepgram"` either, so it had never actually been exercised
+live). Deploying this TTS switch without adding the key first would have
+broken every call immediately on TTS auth — worse than the Rumik issue it
+was meant to fix. `app/services/tts_factory.py`'s `describe_tts` /
+`_TTS_LABELS` surface which TTS actually ran on a given call via the
+`/admin` dashboard's provider-details dialog — check there before assuming
+which vendor is live for a given restaurant.
+
+**Verified for real** (not just code review): `eval_scenarios/manifest.yaml`
+scenarios 16 (`audio_english_stays_english`) and 17 (`audio_hindi_switch`)
+both pass against `flux-naveen-en`, run twice — once isolated, once after
+merging in unrelated upstream commits. Not yet verified: real telephony
+audio quality (8kHz, real caller mic) — the eval suite's audio scenarios
+run through pipecat's synthetic test harness, not an actual phone call.
+Place one real test call before fully trusting pronunciation/barge-in
+behavior on this voice.
+
+---
+
 ## Deploy crash-loops (or 502s) right after a push
 
 **Cause.** Two real incidents, same shape: something worked locally but was
