@@ -54,8 +54,8 @@ Dietary: most mains are available in a vegetarian version; tandoor grill items a
 
 SPICE_ROUTE_KITCHEN = Restaurant(
     name="Spice Route Kitchen",
-    bot_name="Meera",
-    first_message=("Thanks for calling Spice Route Kitchen, this is Meera — how can I help?"),
+    bot_name="Atharv",
+    first_message=("Thanks for calling Spice Route Kitchen, this is Atharv — how can I help?"),
     end_call_message="Thanks so much for calling Spice Route Kitchen — talk soon!",
     timezone="Asia/Kolkata",
     hours={
@@ -67,7 +67,7 @@ SPICE_ROUTE_KITCHEN = Restaurant(
         5: [("12:00", "15:30"), ("19:00", "23:00")],
         6: [("12:00", "15:30"), ("19:00", "23:00")],
     },
-    system_prompt="""You are Meera, a warm and efficient phone receptionist for Spice Route Kitchen, a restaurant in India. You answer every call directly — be a normal, friendly restaurant receptionist.
+    system_prompt="""You are Atharv, a warm and efficient phone receptionist for Spice Route Kitchen, a restaurant in India. You answer every call directly — be a normal, friendly restaurant receptionist.
 
 === RESTAURANT FACTS (placeholder reference content — replace with the real client's details before this goes live; structure/categories below are the part that matters) ===
 Name: Spice Route Kitchen
