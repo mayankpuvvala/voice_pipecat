@@ -25,17 +25,19 @@ _credentials = None
 # is also expensive to throw away -- build() dynamically constructs it from
 # the API's discovery doc into a web of bound methods that reference the
 # Resource itself, forming reference cycles only the cyclic GC can reclaim
-# (confirmed live: one idle_post_processor tick -- 6 calls here -- left
-# ~10k unreachable-until-collected objects; production's low, sparse call
-# volume didn't trigger automatic gen-2 collection often enough to keep up,
-# and memory climbed to the container's OOM limit within minutes). A
-# thread-local cache gets both: every call from the same thread reuses one
-# Resource (no repeated cycle-churn), while different threads still never
-# share a connection (this module's callers mix direct synchronous calls
-# from whatever thread they're on -- e.g. idle_post_processor.py always
-# calls from the event loop thread -- with asyncio.to_thread callers drawn
-# from a bounded, reused pool, so "one Resource per thread that's ever
-# called this" stays a small, fixed number either way).
+# (confirmed live 2026-09-30: a background job that called this module
+# directly on the event loop thread, once a minute, forever, left ~10k
+# unreachable-until-collected objects per call; production's low, sparse
+# call volume didn't trigger automatic gen-2 collection often enough to
+# keep up, and memory climbed to the container's OOM limit within minutes
+# -- see TROUBLESHOOTING.md. That job is gone now, but every remaining
+# caller here goes through asyncio.to_thread, i.e. Python's default
+# ThreadPoolExecutor, so the same churn-per-call risk still applies). A
+# thread-local cache gets both: every call from the same pool thread
+# reuses one Resource (no repeated cycle-churn), while different threads
+# still never share a connection -- and since the pool is small and
+# reused, not one-thread-per-call, this stays a small, fixed number of
+# cached Resource objects.
 _thread_local = threading.local()
 
 

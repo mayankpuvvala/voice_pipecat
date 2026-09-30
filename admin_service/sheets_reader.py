@@ -176,11 +176,13 @@ def _fetch_calls_uncached(sheet_id: str) -> list[dict[str, Any]]:
         call["stt_provider"] = row.get("STTProvider", "")
         call["tts_provider"] = row.get("TTSProvider", "")
         call["providers_backfilled"] = str(row.get("ProvidersBackfilled", "")).strip().lower() == "true"
-        # Idle-triggered whole-transcript analysis (app/pipeline/
-        # idle_post_processor.py, runs in the voice-agent process, not this
-        # one) — more reliable than the live per-topic self-report above,
-        # but only exists once a call's actually been processed. Falls back
-        # to the live-derived values above until then.
+        # PostConfidence/Escalated/PostProcessedAt were written by an
+        # idle-triggered whole-transcript analysis job (ran in the
+        # voice-agent process, not this one), removed 2026-09-30 (no longer
+        # needed — see TROUBLESHOOTING.md) — nothing writes these columns
+        # anymore, but older rows may still have them from before, and they
+        # were more reliable than the live per-topic self-report below, so
+        # still prefer them when present.
         if row.get("PostProcessedAt", "").strip():
             post_rank = _CONFIDENCE_RANK.get(str(row.get("PostConfidence", "")).strip().lower(), 0)
             if post_rank:

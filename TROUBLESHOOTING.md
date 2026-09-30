@@ -496,6 +496,21 @@ investigation), and gated in practice by `active_calls.is_idle()` only
 firing once genuinely idle, but worth closing since it's a footgun for
 whoever adds a shorter `_MIN_IDLE_SECS` later.
 
+**Update, same day: the feature itself was removed.** Once the leak was
+actually understood, the whole point of this investigation evaporated —
+`idle_post_processor.py` and `active_calls.py` were deleted outright
+(along with their wiring in `app/main.py` and the
+`IDLE_POST_PROCESSING_ENABLED` setting) rather than kept around now-fixed.
+The real-time per-call logging (`logging_enforcer.py`) already covers what
+actually matters; the idle-triggered whole-transcript backfill verdict was
+a nice-to-have that stopped being worth the complexity it turned out to
+carry. `app/admin/sheets_reader.py` and `admin_service/sheets_reader.py`
+still read `PostConfidence`/`Escalated`/`PostProcessedAt` if a row happens
+to have them (harmless dead code — nothing writes those columns anymore,
+so this always falls back to the live self-reported values). The
+`sheets_client.py` thread-local caching fix stays regardless — it's a
+real, general fix independent of what removed feature exposed it.
+
 ---
 
 ## Rumik TTS wallet ran dry mid-call → switched default TTS to Deepgram Flux (2026-09-30)

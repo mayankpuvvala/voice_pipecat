@@ -120,14 +120,6 @@ than hardcoded, so adding a client's dashboard doesn't need a code change.
 Deploys and scales independently of the voice agent above; see
 `.env.example`'s own section for its (separate) credentials.
 
-A background loop (`app/pipeline/idle_post_processor.py`, on by default —
-`IDLE_POST_PROCESSING_ENABLED`) picks up finished calls once the bot goes
-idle and backfills a `PostConfidence`/`Escalated` verdict onto the
-`Recordings` sheet via a forced-tool-call OpenAI classification pass over
-the transcript — both admin dashboards surface this (red "Follow-up
-needed" outcomes, confidence and escalation columns/filters), falling back
-to the live self-reported (noisier, mid-call) values until it's run.
-
 ## Reservations & logging
 
 Three tools, all calling Google Sheets directly (`app/services/sheets_client.py`)
@@ -154,9 +146,7 @@ n8n risks dead air if Railway's free tier cold-starts it mid-call:
   CallSessionId, Date, Time, GuestsCount, CallerName, CallerPhone, Status`.
 - Call recordings (`app/pipeline/recording.py`) — saved separately at call
   end, appends a row to the `Recordings` tab: `Timestamp, CallSessionId,
-  CallerPhone, DurationSecs, RecordingURL, Transcript, Summary` (plus
-  `PostConfidence`/`Escalated`/`PostProcessedAt`, backfilled later — see
-  "Admin" above).
+  CallerPhone, DurationSecs, RecordingURL, Transcript, Summary`.
 
 `logInteraction` is **not** a live tool the model calls mid-turn anymore —
 a real trace showed the model splitting every turn into a silent
@@ -312,12 +302,11 @@ Two things confirmed the hard way, not guessed:
   the delivery channel (WhatsApp/SMS/email) is decided. (Real-time,
   per-call escalation alerting — as opposed to this end-of-day digest — is
   built; see "Reservations & logging" above.)
-- **No verbatim-transcript-driven outcome taxonomy beyond confidence/
-  escalation.** `logInteraction` logs a short topic summary, not the full
-  transcript, for the live per-interaction log; full-call transcripts are
-  captured separately in `Recordings` (see above) and idle post-processing
-  now derives a confidence/escalation verdict from them, but there's no
-  finer-grained FAQ/booking/order/missed-call categorization yet.
+- **No verbatim-transcript-driven outcome taxonomy.** `logInteraction` logs
+  a short topic summary, not the full transcript, for the live
+  per-interaction log; full-call transcripts are captured separately in
+  `Recordings` (see above), but there's no finer-grained FAQ/booking/order/
+  missed-call categorization yet.
 - Full-call audio recording lands in Google Drive via OAuth as an actual
   Google account (`app/services/drive_oauth_client.py`) — the service
   account has had zero Drive storage quota since 2021, confirmed live via

@@ -63,14 +63,6 @@ class Settings:
     )
     google_sheet_id: str = os.environ.get("GOOGLE_SHEET_ID", "")
 
-    # Off-critical-path transcript analysis (app/pipeline/idle_post_processor.py)
-    # that only runs once the bot has gone idle — backfills a whole-call
-    # Confidence/Escalated verdict onto the Recordings sheet. On by default;
-    # set false to disable without touching the sheet.
-    idle_post_processing_enabled: bool = (
-        os.environ.get("IDLE_POST_PROCESSING_ENABLED", "true").strip().lower() == "true"
-    )
-
     google_oauth_client_id: str = _restaurant_env("GOOGLE_OAUTH_CLIENT_ID")
     google_oauth_client_secret: str = _restaurant_env("GOOGLE_OAUTH_CLIENT_SECRET")
     google_oauth_refresh_token: str = _restaurant_env("GOOGLE_OAUTH_REFRESH_TOKEN")

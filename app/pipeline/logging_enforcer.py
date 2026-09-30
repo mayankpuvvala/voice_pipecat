@@ -228,11 +228,11 @@ class LogInteractionEnforcer(FrameProcessor):
             # -- this fires as an un-awaited background task (see
             # process_frame's create_task call below), so a client living on
             # `self` for the whole call would leak (no cleanup() hook runs
-            # until pipeline teardown) and closing it there could race an
+            # until pipeline teardown) and closing it there could race a
             # still-in-flight backfill from right before hangup. One client
-            # per invocation sidesteps both. Confirmed live: this was the
-            # actual source of production's OOM kills, not the initially
-            # fixed idle_post_processor leak -- see TROUBLESHOOTING.md.
+            # per invocation sidesteps both. Part of a 2026-09-30 memory
+            # cleanup pass -- see TROUBLESHOOTING.md for the actual root
+            # cause found that day (sheets_client.py, not this).
             async with AsyncOpenAI(api_key=settings.openai_api_key) as client:
                 response = await _create_chat_completion(
                     client,
