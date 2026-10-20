@@ -30,8 +30,10 @@ _INTERACTIONS_SHEET = "Sheet1"
 _DEDUPE_WINDOW_SECS = 10.0
 _PRUNE_AFTER_SECS = 3600.0
 _recent_topics: dict[str, tuple[str, float]] = {}
-# Calls that alerted the owner, so the end-of-call recording link can follow.
-_escalated_sessions: set[str] = set()
+# Calls that alerted the owner (session id -> when), so the end-of-call
+# recording link can follow. Pruned like _recent_topics in case a call's
+# escalation lands after its recording was already saved.
+_escalated_sessions: dict[str, float] = {}
 
 
 def _prune_stale_topics(now_mono: float) -> None:
@@ -101,7 +103,10 @@ async def write_interaction_row(
 
     if not resolved and RESTAURANT.owner_phone:
         if call_session_id:
-            _escalated_sessions.add(call_session_id)
+            now_mono = time.monotonic()
+            for stale in [s for s, t in _escalated_sessions.items() if now_mono - t > _PRUNE_AFTER_SECS]:
+                del _escalated_sessions[stale]
+            _escalated_sessions[call_session_id] = now_mono
         who = caller_name or "A caller"
         callback = f" ({caller_phone})" if caller_phone else ""
         body = (
@@ -127,10 +132,7 @@ def pop_escalation(call_session_id: str) -> bool:
     """Whether this call alerted the owner (and forget it). Called once at
     call end by app/pipeline/recording.py, which follows up with the
     recording link once it exists."""
-    if call_session_id in _escalated_sessions:
-        _escalated_sessions.discard(call_session_id)
-        return True
-    return False
+    return _escalated_sessions.pop(call_session_id, None) is not None
 
 
 async def log_interaction(

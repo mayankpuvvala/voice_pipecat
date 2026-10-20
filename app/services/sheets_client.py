@@ -9,6 +9,7 @@ so it never stalls audio on a live call.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 
 from google.oauth2 import service_account
@@ -40,6 +41,15 @@ _credentials = None
 # cached Resource objects.
 _thread_local = threading.local()
 
+# Header rows barely ever change, but fetching one costs a full Sheets round
+# trip (~375ms measured 2026-10-20) — paid by the caller, mid-call, on every
+# book_table. Cached per tab for a few minutes; a newly added column starts
+# being filled within _HEADER_TTL_SECS. Dropped on any write error in case a
+# stale header caused it.
+_HEADER_TTL_SECS = 300.0
+_header_cache: dict[str, tuple[list[str], float]] = {}
+_header_lock = threading.Lock()
+
 
 def _client():
     global _credentials
@@ -56,12 +66,13 @@ def _client():
     return _thread_local.service
 
 
-def append_row(sheet_name: str, row: dict[str, Any]) -> None:
-    """Append one row to `sheet_name`, ordered by that sheet's own header
-    row (the single source of truth for column layout). Keys in `row` not
-    in the header are dropped; missing header columns are written blank.
-    """
-    service = _client()
+def _header(service, sheet_name: str) -> list[str]:
+    """`sheet_name`'s header row, cached for _HEADER_TTL_SECS."""
+    now = time.monotonic()
+    with _header_lock:
+        cached = _header_cache.get(sheet_name)
+    if cached and now - cached[1] < _HEADER_TTL_SECS:
+        return cached[0]
     header_result = (
         service.spreadsheets()
         .values()
@@ -70,22 +81,44 @@ def append_row(sheet_name: str, row: dict[str, Any]) -> None:
     )
     header = header_result.get("values", [[]])
     header = header[0] if header else []
+    if header:
+        with _header_lock:
+            _header_cache[sheet_name] = (header, now)
+    return header
+
+
+def _forget_header(sheet_name: str) -> None:
+    with _header_lock:
+        _header_cache.pop(sheet_name, None)
+
+
+def append_row(sheet_name: str, row: dict[str, Any]) -> None:
+    """Append one row to `sheet_name`, ordered by that sheet's own header
+    row (the single source of truth for column layout). Keys in `row` not
+    in the header are dropped; missing header columns are written blank.
+    """
+    service = _client()
+    header = _header(service, sheet_name)
     if not header:
         raise RuntimeError(
             f"Sheet tab '{sheet_name}' has no header row — add one before writing rows"
         )
 
     values = [str(row.get(col, "")) for col in header]
-    service.spreadsheets().values().append(
-        spreadsheetId=settings.google_sheet_id,
-        range=f"{sheet_name}!A1",
-        # RAW, not USER_ENTERED: the latter parses cells like manual keyboard
-        # entry, silently mangling data we need byte-for-byte — confirmed
-        # live, caller_phone="0000000000" came back read as "0".
-        valueInputOption="RAW",
-        insertDataOption="INSERT_ROWS",
-        body={"values": [values]},
-    ).execute()
+    try:
+        service.spreadsheets().values().append(
+            spreadsheetId=settings.google_sheet_id,
+            range=f"{sheet_name}!A1",
+            # RAW, not USER_ENTERED: the latter parses cells like manual keyboard
+            # entry, silently mangling data we need byte-for-byte — confirmed
+            # live, caller_phone="0000000000" came back read as "0".
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [values]},
+        ).execute()
+    except Exception:
+        _forget_header(sheet_name)
+        raise
 
 
 def read_rows(sheet_name: str) -> list[dict[str, Any]]:
@@ -131,14 +164,7 @@ def update_cells(sheet_name: str, row_number: int, updates: dict[str, Any]) -> N
     without crashing.
     """
     service = _client()
-    header_result = (
-        service.spreadsheets()
-        .values()
-        .get(spreadsheetId=settings.google_sheet_id, range=f"{sheet_name}!1:1")
-        .execute()
-    )
-    header = header_result.get("values", [[]])
-    header = header[0] if header else []
+    header = _header(service, sheet_name)
 
     data = []
     for col, value in updates.items():

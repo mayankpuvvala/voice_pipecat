@@ -31,6 +31,24 @@ One restaurant active per deployment, picked via the `RESTAURANT_ID` env var
 (`app/config/restaurants/`) — currently Spice Route Kitchen and Zero40
 Brewing are configured; add a new client the same way without restructuring.
 
+## Architecture
+
+- **Real-time path (one Pipecat pipeline per call):** telephony audio arrives
+  over a FastAPI WebSocket → Silero VAD + streaming STT → OpenAI LLM with
+  function calling → output guards → streaming TTS → back to the caller.
+- **Tools:** `check_availability`, `book_table` and `end_call`, validated
+  against the restaurant's own config and written straight to Google Sheets
+  — no webhook hop mid-call.
+- **Off the critical path:** interaction logging, call summaries and
+  recording uploads (Google Drive) run in the background, so they never
+  delay the caller's next turn.
+- **Reliability:** STT connect retries and LLM retry-on-timeout; when a stage
+  is truly down, `CallHealthMonitor` apologizes and hangs up cleanly instead
+  of leaving dead air, and alerts the owner by SMS / WhatsApp.
+- **Observability:** Langfuse per-call tracing, per-call provider tracking,
+  `/admin/health` live checks, a multi-tenant admin dashboard, and a
+  29-scenario eval suite.
+
 ## Setup
 
 ```bash
