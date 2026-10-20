@@ -26,9 +26,9 @@ class Settings:
     restaurant_id: str = _RESTAURANT_ID
 
     openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
-    # gpt-5.6-luna over gpt-5-mini (unreliable relative-date resolution) or
-    # gpt-5-nano (correct but too slow, 10-29s). See TROUBLESHOOTING.md.
-    openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
+    # gpt-4.1-mini over gpt-5.6-luna (ignored details given in one
+    # sentence, 19/25 evals vs 25/25). See TROUBLESHOOTING.md.
+    openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
     openai_tts_voice: str = os.environ.get("OPENAI_TTS_VOICE", "echo")
 
     # Conversational LLM only — other call sites use their own OpenAI client.

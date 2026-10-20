@@ -8,6 +8,37 @@ outages mid-call. Ordered roughly by how likely you are to hit each one.
 
 ## Conversational LLM model choice (OPENAI_MODEL)
 
+**2026-10-20: switched gpt-5.6-luna → gpt-4.1-mini.** Found while preparing
+a demo: a caller giving everything in one sentence ("table for two next
+Monday at 8 PM, my name is Mayank") got asked again for a detail they'd
+just given — "What date?", "What time?", "What name?", even "What year?".
+Not date math: adding a precomputed 14-day date table to the prompt didn't
+help (0/12). Probed directly with the real Spice Route prompt + tools, 6
+trials per model:
+
+| model | all-in-one (Mon) | all-in-one (Thu) | hours Q | median latency |
+|---|---|---|---|---|
+| gpt-5.6-luna | 1/6 | 3/6 | 6/6 | 1.2–1.9s |
+| gpt-5.4-nano | 6/6 | 6/6 | 6/6 | 0.8–1.2s |
+| gpt-5.4-mini | 6/6 | 6/6 | 6/6 | ~1.0s |
+| gpt-4.1-mini | 6/6 | 6/6 | 6/6 | 1.0–1.2s |
+
+Then the eval suite (25 text scenarios, Spice Route, stale dates bumped):
+luna 19/25 (04, 10, 13, 24, 25 + a closed-Monday demo case — all the
+one-sentence pattern), gpt-5.4-nano 20/25 (calls `end_call` *before* its
+goodbye, so end_call refuses and the bot never hangs up; also re-asks a
+given name/number in 14), **gpt-4.1-mini 25/25, twice**.
+
+gpt-4.1-mini rejects `reasoning_effort`; `app/main.py`'s startup probe,
+`logging_enforcer.py` and `/admin/health` already detect that and omit it
+(confirmed in eval logs: probe logged "rejects reasoning_effort", 31/31
+background logs ok=True). Cost goes up (input $0.40 vs $0.20 per 1M,
+mostly served from prompt cache) — still a fraction of a paisa per turn.
+
+**Lesson:** the original model choice was validated on single-question
+tests (one date, one fact). Test the way callers actually talk — several
+details in one breath — before trusting a model swap.
+
 **Cause for the switch away from gpt-5-mini.** Investigating turn latency
 (see the next section) led to directly benchmarking gpt-5-mini against
 newer OpenAI models on this account (gpt-4.1-nano, gpt-5-nano, gpt-5.4-nano,
