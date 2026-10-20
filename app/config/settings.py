@@ -80,6 +80,9 @@ class Settings:
     # gives up on a live call — separate from Restaurant.owner_phone's
     # per-caller callback texts. Unset leaves it log-only.
     ops_alert_phone: str = os.environ.get("OPS_ALERT_PHONE", "")
+    # Free owner WhatsApp alerts (app/services/whatsapp_client.py). The key is
+    # tied to one owner phone, hence per-restaurant. Unset = WhatsApp off.
+    whatsapp_callmebot_apikey: str = _restaurant_env("WHATSAPP_CALLMEBOT_APIKEY")
 
     # Call tracing via Langfuse's OTel endpoint — see app/pipeline/tracing.py.
     # Unset either key and tracing just stays off.

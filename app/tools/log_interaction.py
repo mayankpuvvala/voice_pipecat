@@ -2,9 +2,10 @@
 directly to Google Sheets (moved off an n8n webhook that risked cold-start
 dead air mid-call — see app.services.sheets_client).
 
-Human escalation: an SMS to RESTAURANT.owner_phone fires the moment a row
-is written with resolved=false — the single place every escalation path
-converges. Never blocks/raises on send failure.
+Human escalation: an SMS and a WhatsApp message to RESTAURANT.owner_phone
+fire the moment a row is written with resolved=false — the single place
+every escalation path converges; recording.py follows up on WhatsApp with
+the call recording link at call end. Never blocks/raises on send failure.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pipecat.services.llm_service import FunctionCallParams
 from app.config.restaurants import ACTIVE_RESTAURANT as RESTAURANT
 from app.services import sheets_client
 from app.services.twilio_client import send_sms
+from app.services.whatsapp_client import send_whatsapp
 
 _INTERACTIONS_SHEET = "Sheet1"
 
@@ -28,6 +30,8 @@ _INTERACTIONS_SHEET = "Sheet1"
 _DEDUPE_WINDOW_SECS = 10.0
 _PRUNE_AFTER_SECS = 3600.0
 _recent_topics: dict[str, tuple[str, float]] = {}
+# Calls that alerted the owner, so the end-of-call recording link can follow.
+_escalated_sessions: set[str] = set()
 
 
 def _prune_stale_topics(now_mono: float) -> None:
@@ -96,21 +100,37 @@ async def write_interaction_row(
         return False
 
     if not resolved and RESTAURANT.owner_phone:
+        if call_session_id:
+            _escalated_sessions.add(call_session_id)
         who = caller_name or "A caller"
         callback = f" ({caller_phone})" if caller_phone else ""
         body = (
             f"{RESTAURANT.name}: {who}{callback} needs a follow-up — {topic}. "
             f"{details}".strip()
         )
-        sent = await send_sms(RESTAURANT.owner_phone, body)
+        sms_sent, whatsapp_sent = await asyncio.gather(
+            send_sms(RESTAURANT.owner_phone, body),
+            send_whatsapp(RESTAURANT.owner_phone, body),
+        )
         logger.info(
-            "Escalation SMS to owner for call {} (topic={!r}): sent={}",
+            "Escalation alert to owner for call {} (topic={!r}): sms={} whatsapp={}",
             call_session_id,
             topic,
-            sent,
+            sms_sent,
+            whatsapp_sent,
         )
 
     return True
+
+
+def pop_escalation(call_session_id: str) -> bool:
+    """Whether this call alerted the owner (and forget it). Called once at
+    call end by app/pipeline/recording.py, which follows up with the
+    recording link once it exists."""
+    if call_session_id in _escalated_sessions:
+        _escalated_sessions.discard(call_session_id)
+        return True
+    return False
 
 
 async def log_interaction(

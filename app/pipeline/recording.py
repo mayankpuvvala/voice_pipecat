@@ -22,9 +22,12 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
+from app.config.restaurants import ACTIVE_RESTAURANT
 from app.pipeline.transcript import generate_call_summary
 from app.services import drive_oauth_client as recording_backend
 from app.services import sheets_client
+from app.services.whatsapp_client import send_whatsapp
+from app.tools.log_interaction import pop_escalation
 
 _RECORDINGS_SHEET = "Recordings"
 _SAMPLE_WIDTH_BYTES = 2  # pipecat's raw audio frames are 16-bit PCM throughout
@@ -166,3 +169,13 @@ class CallRecorder:
             await asyncio.to_thread(sheets_client.append_row, _RECORDINGS_SHEET, row)
         except Exception:
             logger.exception("Failed to log recording row for {}", self._call_session_id)
+
+        # The mid-call escalation alert went out before the recording existed;
+        # follow up so the owner can hear the call before calling back.
+        if pop_escalation(self._call_session_id) and ACTIVE_RESTAURANT.owner_phone:
+            listen = f"\nListen: {recording_url}" if recording_url else ""
+            body = f"{ACTIVE_RESTAURANT.name} — call needing follow-up ({self._caller_phone or 'unknown number'}):\n{summary}{listen}"
+            sent = await send_whatsapp(ACTIVE_RESTAURANT.owner_phone, body)
+            logger.info(
+                "Escalation recording follow-up for call {}: whatsapp={}", self._call_session_id, sent
+            )
