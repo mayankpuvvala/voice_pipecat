@@ -39,6 +39,31 @@ mostly served from prompt cache) — still a fraction of a paisa per turn.
 tests (one date, one fact). Test the way callers actually talk — several
 details in one breath — before trusting a model swap.
 
+**Correction (2026-10-21):** production's Railway `OPENAI_MODEL` was
+actually `gpt-4o-mini` (its startup logs say so), not the `gpt-5.6-luna`
+the local `.env` and code default had — the comparison above is
+luna-vs-4.1-mini, gpt-4o-mini wasn't measured. Production now runs
+gpt-4.1-mini; `/admin/health` passed on deploy (LLM, tool call, STT, both
+TTS, Drive). Check the Railway variable, not just `.env`, before assuming
+what production runs.
+
+## Memory: ~520MB idle → ~240MB with MALLOC_ARENA_MAX=2 (2026-10-21)
+
+Idle memory was ~520MB on Railway vs ~280MB for the same imports on
+Windows. Not a leak: about 280MB is import cost (scipy via pipecat's
+pyloudnorm ~73MB, openai ~38MB, onnxruntime, nltk, aiortc…) and each
+Silero VAD instance is only ~11MB private (disabling onnxruntime's memory
+arena saved nothing). The gap was glibc malloc creating per-thread arenas
+for the thread pool (`asyncio.to_thread` Sheets/Drive calls). Setting the
+Railway variable `MALLOC_ARENA_MAX=2` dropped it to ~240MB right after a
+full `/admin/health` run. If memory ever climbs again, compare against
+that baseline first.
+
+Also: anything polling the public URL (an uptime pinger, a deploy-watch
+loop) keeps the service awake — `sleepApplication` is on, so idle cost is
+~0 only when nothing hits it. Check `railway deployment list` instead of
+curling `/` to watch deploys.
+
 **Cause for the switch away from gpt-5-mini.** Investigating turn latency
 (see the next section) led to directly benchmarking gpt-5-mini against
 newer OpenAI models on this account (gpt-4.1-nano, gpt-5-nano, gpt-5.4-nano,
