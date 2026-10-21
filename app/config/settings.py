@@ -53,6 +53,12 @@ class Settings:
     # the call on its own the way it does for Vobiz.
     plivo_auth_id: str = os.environ.get("PLIVO_AUTH_ID", "")
     plivo_auth_token: str = os.environ.get("PLIVO_AUTH_TOKEN", "")
+    # Vobiz's own REST credentials (console.vobiz.ai), used ONLY by
+    # transfer_call's Transfer API request (app/services/call_transfer.py)
+    # — Vobiz calls never needed REST creds before, since closing our
+    # WebSocket ends them. Unset = live transfer stays off on Vobiz calls.
+    vobiz_auth_id: str = os.environ.get("VOBIZ_AUTH_ID", "")
+    vobiz_auth_token: str = os.environ.get("VOBIZ_AUTH_TOKEN", "")
     # SMS-capable Twilio number for real-time human-escalation texts (see
     # twilio_client.send_sms). Leave unset and escalation SMS just stays off.
     twilio_sms_from_number: str = os.environ.get("TWILIO_SMS_FROM_NUMBER", "")
