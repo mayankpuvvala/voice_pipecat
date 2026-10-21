@@ -43,12 +43,21 @@ class DynamicPromptInjector(FrameProcessor):
     """
 
     def __init__(
-        self, *, context: LLMContext, restaurant: Restaurant, llm: OpenAILLMService, **kwargs
+        self,
+        *,
+        context: LLMContext,
+        restaurant: Restaurant,
+        llm: OpenAILLMService,
+        live_transfer: bool = False,
+        **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._context = context
         self._restaurant = restaurant
         self._llm = llm
+        # Must match the initial prompt's, or a rebuild here would silently
+        # drop (or add) the transfer_call rules mid-call.
+        self._live_transfer = live_transfer
         self._active_topics: frozenset[TopicFacts] = frozenset()
         self._matchers: dict[TopicFacts, re.Pattern[str]] = {
             topic: re.compile(
@@ -84,7 +93,9 @@ class DynamicPromptInjector(FrameProcessor):
                         service=self._llm,
                         delta=OpenAILLMService.Settings(
                             system_instruction=build_system_prompt(
-                                self._restaurant, frozenset(self._active_topics)
+                                self._restaurant,
+                                frozenset(self._active_topics),
+                                live_transfer=self._live_transfer,
                             )
                         ),
                     ),

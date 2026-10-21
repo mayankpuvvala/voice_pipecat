@@ -4,11 +4,13 @@ TELEPHONY_TRANSPORT env var and the Jio → Exotel → this server call path.
 Vobiz auto-detects as "plivo" and is routed via `_create_vobiz_transport()`.
 Real Plivo is wire-identical to Vobiz but needs opposite keepCallAlive/
 auto_hang_up behavior — see /plivo-answer and `_create_plivo_transport()`.
+Live transfer (transfer_call) is wired per call in `_build_transfer_line()`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import sys
 from urllib.parse import quote
@@ -28,7 +30,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from aiortc import RTCIceServer
-from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
+from pipecat.runner.types import EvalRunnerArguments, RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport, parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequestHandler
@@ -42,9 +44,10 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPI
 from pipecat.workers.runner import WorkerRunner
 
 from app.admin.routes import register_admin_routes
-from app.config.restaurants import ACTIVE_RESTAURANT
+from app.config.restaurants import ACTIVE_RESTAURANT, transfer_target
 from app.config.settings import settings
 from app.live_client import register_live_test_client
+from app.pipeline.bot_speech_tracker import BotSpeechTracker
 from app.pipeline.call_health import CallHealthMonitor
 from app.pipeline.dynamic_prompt import DynamicPromptInjector
 from app.pipeline.logging_enforcer import LogInteractionEnforcer, WorkerHandle
@@ -55,11 +58,18 @@ from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
 from app.pipeline.tts_language_switcher import TTSLanguageSwitcher
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
+from app.services.call_transfer import (
+    TransferLine,
+    credentials_configured,
+    set_plivo_auto_hang_up,
+)
 from app.services.stt_factory import build_stt, describe_stt
 from app.services.tts_factory import build_tts, describe_tts
 from app.services.twilio_client import fetch_ice_servers_sync, lookup_caller_number
 from app.tools.end_call import end_call
 from app.tools.reservations import book_table, check_availability
+from app.tools.transfer_call import transfer_call
+from app.transfer_routes import register_transfer_routes
 
 # pipecat.runner.run exports `app` as an extension point for adding
 # routes before main() — see that module's docstring.
@@ -172,6 +182,8 @@ async def root_status() -> dict:
 
 register_admin_routes(runner_app)
 register_live_test_client(runner_app)
+# /transfer-dial + /transfer-dial-status: the XML a live transfer lands on.
+register_transfer_routes(runner_app, ACTIVE_RESTAURANT)
 
 
 @runner_app.post("/answer", include_in_schema=False)
@@ -289,7 +301,11 @@ transport_params = {
 }
 
 
-async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
+async def run_bot(
+    transport: BaseTransport,
+    runner_args: RunnerArguments,
+    transfer_line: TransferLine | None = None,
+) -> None:
     logger.info("Starting bot for {}", ACTIVE_RESTAURANT.name)
 
     call_session_id = getattr(runner_args, "session_id", None) or ""
@@ -302,7 +318,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # logInteraction is deliberately NOT a live tool — calling it inline
     # doubled LLM latency per turn. LogInteractionEnforcer backfills it
     # in the background instead, off the call's critical path.
-    context = LLMContext(tools=[check_availability, book_table, end_call])
+    # transfer_call is registered (and its prompt rules included) only when
+    # this call can actually be transferred — see _build_transfer_line. On
+    # Exotel/Twilio/WebRTC (or a Plivo/Vobiz call missing creds or a
+    # number), the model never learns it exists and keeps the existing
+    # take-a-message escalation, rather than announcing a handoff that can
+    # only fail.
+    live_transfer = transfer_line is not None
+    tools = [check_availability, book_table, end_call]
+    if live_transfer:
+        tools.append(transfer_call)
+    context = LLMContext(tools=tools)
     call_state = {"transcript": ""}
 
     def capture_transcript() -> None:
@@ -347,7 +373,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 retry_on_timeout=True,
                 settings=GroqLLMService.Settings(
                     model=settings.groq_model,
-                    system_instruction=build_system_prompt(ACTIVE_RESTAURANT),
+                    system_instruction=build_system_prompt(
+                        ACTIVE_RESTAURANT, live_transfer=live_transfer
+                    ),
                 ),
             )
         return OpenAILLMService(
@@ -357,7 +385,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             retry_on_timeout=True,
             settings=OpenAILLMService.Settings(
                 model=settings.openai_model,
-                system_instruction=build_system_prompt(ACTIVE_RESTAURANT),
+                system_instruction=build_system_prompt(
+                    ACTIVE_RESTAURANT, live_transfer=live_transfer
+                ),
                 # See _detect_reasoning_effort_required's docstring above --
                 # this account/model combo has been confirmed to need this
                 # explicit at some points and reject it outright at others,
@@ -404,8 +434,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     second_paragraph_filter = SecondParagraphFilter()
     tts_language_switcher = TTSLanguageSwitcher(tts)
     dynamic_prompt_injector = DynamicPromptInjector(
-        context=context, restaurant=ACTIVE_RESTAURANT, llm=llm
+        context=context, restaurant=ACTIVE_RESTAURANT, llm=llm, live_transfer=live_transfer
     )
+    # Lets transfer_call wait for its handoff line to finish playing before
+    # the provider moves the caller's leg (see bot_speech_tracker.py).
+    bot_speech_tracker = BotSpeechTracker()
 
     # buffer_size makes AudioBufferProcessor flush on_audio_data periodically
     # instead of only once at call end — without it the processor holds the
@@ -464,9 +497,18 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             "worker_handle": worker_handle,
             "capture_transcript": capture_transcript,
             "turn_taking_guard": turn_taking_guard,
+            "transfer_line": transfer_line,
+            "bot_speech_tracker": bot_speech_tracker,
         },
     )
     worker_handle.worker = worker
+
+    if live_transfer:
+        worker.add_reached_downstream_filter(BotSpeechTracker.FRAME_TYPES)
+
+        @worker.event_handler("on_frame_reached_downstream")
+        async def on_frame_reached_downstream(worker, frame):
+            bot_speech_tracker.observe(frame)
 
     @worker.event_handler("on_pipeline_error")
     async def on_pipeline_error(worker, frame):
@@ -571,6 +613,55 @@ def _create_plivo_transport(runner_args: WebSocketRunnerArguments, call_data) ->
     return FastAPIWebsocketTransport(websocket=runner_args.websocket, params=params)
 
 
+def _build_transfer_line(
+    provider: str, runner_args: WebSocketRunnerArguments, call_data, transport: BaseTransport
+) -> TransferLine | None:
+    """Whether (and how) this Plivo/Vobiz call can be live-transferred.
+
+    None — and so no transfer_call tool this call — unless the restaurant
+    has a transfer target, the provider's REST creds are set, and the
+    handshake carried a call UUID. aleg_url is built off the same Host
+    header /answer and /plivo-answer already use for the stream URL; the
+    DID the caller dialed rides along as callerId (an owned number — see
+    build_dial_xml).
+    """
+    target = transfer_target(ACTIVE_RESTAURANT)
+    if not target:
+        logger.info("Live transfer off: {} has no transfer_number/owner_phone", ACTIVE_RESTAURANT.name)
+        return None
+    if not credentials_configured(provider):
+        logger.warning("Live transfer off: {} REST credentials aren't set", provider)
+        return None
+    call_uuid = getattr(call_data, "call_id", None) or ""
+    if not call_uuid:
+        logger.warning("Live transfer off: no call UUID in the {} handshake", provider)
+        return None
+
+    aleg_url = f"https://{runner_args.websocket.headers.get('host')}/transfer-dial"
+    caller_id = getattr(call_data, "to_number", None) or ""
+    if caller_id:
+        aleg_url += f"?caller_id={quote(caller_id)}"
+
+    set_auto_hang_up = None
+    if provider == "plivo":
+        # Real Plivo's serializer hangs up on pipeline teardown; transfer_call
+        # must be able to switch that off, or a transfer would hang up the
+        # caller it just moved. Fail safe: no handle, no transfer.
+        serializer = getattr(getattr(transport, "_params", None), "serializer", None)
+        if not isinstance(serializer, PlivoFrameSerializer):
+            logger.error("Live transfer off: couldn't reach the Plivo serializer to disarm hang-up")
+            return None
+        set_auto_hang_up = functools.partial(set_plivo_auto_hang_up, serializer)
+
+    return TransferLine(
+        provider=provider,
+        target_number=target,
+        call_uuid=call_uuid,
+        aleg_url=aleg_url,
+        set_auto_hang_up=set_auto_hang_up,
+    )
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Entry point the Pipecat dev runner looks for."""
     if isinstance(runner_args, WebSocketRunnerArguments) and runner_args.transport_type != "websocket":
@@ -585,14 +676,27 @@ async def bot(runner_args: RunnerArguments) -> None:
             # already used for from/to) since there's no other way to tell
             # them apart at this point.
             if runner_args.websocket.query_params.get("provider") == "plivo":
+                provider = "plivo"
                 transport = _create_plivo_transport(runner_args, call_data)
             else:
+                provider = "vobiz"
                 transport = _create_vobiz_transport(runner_args, call_data)
-            await run_bot(transport, runner_args)
+            transfer_line = _build_transfer_line(provider, runner_args, call_data, transport)
+            await run_bot(transport, runner_args, transfer_line=transfer_line)
             return
 
+    transfer_line = None
+    if isinstance(runner_args, EvalRunnerArguments):
+        # Eval scenarios that exercise transfer_call opt in through their
+        # suite entry's runner_body (see eval_scenarios/manifest.yaml) — a
+        # "simulated" line that runs the tool's gates and ordering but never
+        # dials. Every other scenario runs without it, same as Exotel.
+        simulate_to = (runner_args.body or {}).get("simulate_transfer_to", "")
+        if simulate_to:
+            transfer_line = TransferLine(provider="simulated", target_number=simulate_to)
+
     transport = await create_transport(runner_args, transport_params)
-    await run_bot(transport, runner_args)
+    await run_bot(transport, runner_args, transfer_line=transfer_line)
 
 
 if __name__ == "__main__":

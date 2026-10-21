@@ -2,7 +2,8 @@
 
 Layers the restaurant's ported Vapi prompt with additions this port needs:
 language handling, brevity, off-topic redirects, mis-transcription guards,
-current date/time, a reservation-tool gate, and a logInteraction note.
+current date/time, a reservation-tool gate, a logInteraction note, and —
+only on calls that can be live-transferred — the transfer_call rules.
 """
 
 from __future__ import annotations
@@ -187,12 +188,43 @@ while they might still need something (silence, thinking, or an unanswered
 question is not the same as being done)."""
 
 
+# Only included on calls where transfer_call is actually registered (real
+# Plivo/Vobiz with a transfer number — see app/main.py's run_bot), so the
+# model is never told about a tool it doesn't have.
+_TRANSFER_INSTRUCTION = """
+
+# Live transfer to a real person (transfer_call)
+On this call you can connect the caller to a real staff member live with
+transfer_call. Use it — instead of taking a message — when:
+- the caller explicitly asks for a human, a real person, a manager, or the
+  owner (honor it right away, don't try to talk them out of it);
+- the caller is making a complaint (don't try to resolve it yourself);
+- the caller needs something you can't do yourself (e.g. changing or
+  cancelling an existing booking, a private event) — offer to connect them
+  now, and transfer if they say yes; if they'd rather not, take a message
+  as usual.
+Never transfer for things you can answer from your facts or tools, and
+never for an emergency (that's the 112 rule).
+Say ONE short handoff line out loud and call transfer_call in that same
+response, e.g. "Sure, let me connect you to the manager — one moment."
+Never call transfer_call before that line is spoken, and don't say goodbye
+or call end_call — the transfer ends your part of the call.
+If transfer_call returns transferred: false, the caller is still with you:
+follow its next_step exactly (usually: take their name and number for the
+owner's callback)."""
+
+
 def build_system_prompt(
-    restaurant: Restaurant, active_topics: frozenset[TopicFacts] = frozenset()
+    restaurant: Restaurant,
+    active_topics: frozenset[TopicFacts] = frozenset(),
+    *,
+    live_transfer: bool = False,
 ) -> str:
     """`active_topics` selects which `restaurant.topic_facts` to splice in
     (matched by keyword — see app/pipeline/dynamic_prompt.py). Defaults to
     none, for the leanest initial system_instruction before the caller speaks.
+    `live_transfer` adds the transfer_call rules — pass it exactly when
+    transfer_call is registered for this call.
     """
     topic_blocks = "".join(f"\n\n{topic.text}" for topic in restaurant.topic_facts if topic in active_topics)
     return (
@@ -203,6 +235,7 @@ def build_system_prompt(
         + _OFF_TOPIC_INSTRUCTION
         + _BOT_DISCLOSURE_INSTRUCTION
         + _ESCALATION_INSTRUCTION
+        + (_TRANSFER_INSTRUCTION if live_transfer else "")
         + _UNCLEAR_INPUT_INSTRUCTION
         + _current_time_instruction(restaurant)
         + _RESERVATION_TOOL_INSTRUCTION
