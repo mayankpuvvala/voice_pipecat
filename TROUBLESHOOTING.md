@@ -832,6 +832,45 @@ lineup isn't stable.
 
 ---
 
+## Live transfer (transfer_call) not happening, or the caller gets dropped
+
+Not yet confirmed on a real call — written from the provider docs
+(https://www.plivo.com/docs/voice/api/call/transfer-a-call,
+https://www.vobiz.ai/docs/call/transfer-call) and offline tests. Check in
+this order:
+
+- **Bot never offers a transfer, keeps taking messages instead.** Expected
+  unless all three hold: the call is real Plivo or Vobiz, that provider's
+  REST creds are set (`PLIVO_AUTH_*` / `VOBIZ_AUTH_*`), and the active
+  restaurant has `transfer_number` or `owner_phone`. The call's first log
+  lines say which one is missing: `Live transfer off: ...`.
+- **Bot says "connecting you", then apologises and offers a callback.** The
+  Transfer API refused or timed out — look for `Transfer rejected by
+  <provider> for call <uuid>: status=... body=...`. 401 = wrong creds (or,
+  per Vobiz's docs, a wrong-case path); 404 = that call UUID isn't
+  in-progress any more.
+- **Transfer accepted, but the caller hears "no one could take your
+  call".** The `<Dial>` itself didn't connect — `/transfer-dial-status` logs
+  `DialStatus`/`DialHangupCause`. Busy/no-answer is just the staff phone;
+  `failed` usually means the `callerId` (the DID the caller dialed) isn't a
+  number the account owns, or the transfer number isn't in E.164.
+- **Caller is dropped the moment the transfer starts.** Most likely our
+  stream teardown ending the call before the provider moved the leg. Real
+  Plivo: the serializer's REST hang-up should already be disarmed
+  (`set_plivo_auto_hang_up` in `app/services/call_transfer.py` — it pokes
+  pipecat's private `_hangup_attempted`, pinned by a unit test; recheck it
+  after any pipecat upgrade). Vobiz: `/answer` uses
+  `keepCallAlive="false"`, and neither provider documents what a transfer
+  does to a running `<Stream>` — if Vobiz treats the stream ending as the
+  call ending even after a transfer, `/answer` needs
+  `keepCallAlive="true"` plus a REST hang-up like real Plivo's.
+- **Handoff line cut off mid-word.** The tool waits for
+  `BotStoppedSpeakingFrame` plus 0.6s of silence before requesting the
+  transfer (`app/pipeline/bot_speech_tracker.py`); if the provider still
+  had audio buffered, raise `settle` there.
+
+---
+
 ## Dependency versions
 
 `requirements.txt` is pinned to exact versions (`==`), not left floating —
