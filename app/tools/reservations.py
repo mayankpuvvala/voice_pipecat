@@ -8,6 +8,7 @@ No seat/order cap is enforced yet — any request inside hours is bookable.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -76,6 +77,40 @@ def book_table_succeeded_this_call(context: LLMContext) -> bool:
     return False
 
 
+def _already_booked_this_call(
+    context: LLMContext, date: str, time: str, guests_count: str, caller_name: str
+) -> bool:
+    """Whether an identical book_table call already returned booked: true this call.
+
+    Idempotency guard: the model can re-issue book_table after a tool-round
+    retry or a repeated "yes", which would append a duplicate Bookings row
+    (and a second reservation for the owner to act on).
+    """
+    wanted = (date, time, str(guests_count).strip(), caller_name.strip().lower())
+    booked_args: dict[str, tuple[str, str, str, str]] = {}
+    for message in context.messages:
+        if message.get("role") == "assistant":
+            for tool_call in message.get("tool_calls") or []:
+                function = tool_call.get("function") or {}
+                if function.get("name") != "book_table":
+                    continue
+                try:
+                    args = json.loads(function.get("arguments") or "{}")
+                except ValueError:
+                    continue
+                booked_args[tool_call.get("id")] = (
+                    str(args.get("date", "")),
+                    str(args.get("time", "")),
+                    str(args.get("guests_count", "")).strip(),
+                    str(args.get("caller_name", "")).strip().lower(),
+                )
+        elif message.get("role") == "tool" and message.get("tool_call_id") in booked_args:
+            content = (message.get("content") or "").replace(" ", "")
+            if '"booked":true' in content and booked_args[message["tool_call_id"]] == wanted:
+                return True
+    return False
+
+
 async def check_availability(
     params: FunctionCallParams,
     date: str,
@@ -140,6 +175,11 @@ async def book_table(
         await params.result_callback(
             {"booked": False, "reason": "caller name is required — ask for it before booking"}
         )
+        return
+
+    if _already_booked_this_call(params.context, date, time, guests_count, caller_name):
+        logger.warning("book_table: identical booking already confirmed this call — not re-writing")
+        await params.result_callback({"booked": True, "reason": "already booked"})
         return
 
     if not _confirmed_since_last_availability_check(params.context):

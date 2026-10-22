@@ -194,18 +194,22 @@ def build_system_prompt(
     (matched by keyword — see app/pipeline/dynamic_prompt.py). Defaults to
     none, for the leanest initial system_instruction before the caller speaks.
     """
+    # Ordered for provider prompt caching (OpenAI caches the longest identical
+    # prefix): everything identical across calls first, the per-call pieces
+    # (topic facts, timestamp) last. Putting them mid-prompt made every
+    # instruction after them uncacheable.
     topic_blocks = "".join(f"\n\n{topic.text}" for topic in restaurant.topic_facts if topic in active_topics)
     return (
         restaurant.system_prompt
-        + topic_blocks
         + _LANGUAGE_INSTRUCTION
         + _BREVITY_INSTRUCTION
         + _OFF_TOPIC_INSTRUCTION
         + _BOT_DISCLOSURE_INSTRUCTION
         + _ESCALATION_INSTRUCTION
         + _UNCLEAR_INPUT_INSTRUCTION
-        + _current_time_instruction(restaurant)
         + _RESERVATION_TOOL_INSTRUCTION
         + _LOGGING_TIMING_INSTRUCTION
         + _END_CALL_INSTRUCTION
+        + topic_blocks
+        + _current_time_instruction(restaurant)
     )
