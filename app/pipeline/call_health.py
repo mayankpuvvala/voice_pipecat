@@ -98,7 +98,7 @@ class CallHealthMonitor:
             sent = await send_sms(
                 settings.ops_alert_phone,
                 f"[{self._restaurant_name}] Live call degraded (stage={stage}) and is "
-                f"being ended. call_session_id={self._call_session_id} detail={detail}",
+                f"being ended. call_session_id={self._call_session_id} detail={str(detail)[:200]}",
             )
             logger.info("Ops alert SMS for degraded call {}: sent={}", self._call_session_id, sent)
 

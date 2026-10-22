@@ -126,7 +126,7 @@ def _detect_reasoning_effort_required() -> bool:
             },
         }
     ]
-    client = _SyncOpenAI(api_key=settings.openai_api_key)
+    client = _SyncOpenAI(api_key=settings.openai_api_key, timeout=10, max_retries=0)
     try:
         client.chat.completions.create(
             model=settings.openai_model,
@@ -140,7 +140,7 @@ def _detect_reasoning_effort_required() -> bool:
         )
         return True
     except Exception as e:
-        if "Unrecognized request argument supplied: reasoning_effort" in str(e):
+        if "reasoning_effort" in str(e) and ("nrecognized" in str(e) or "nsupported" in str(e)):
             logger.warning(
                 "Startup probe: {} rejects reasoning_effort on this account -- "
                 "omitting it for this process (see TROUBLESHOOTING.md)",

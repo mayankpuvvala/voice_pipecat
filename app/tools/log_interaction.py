@@ -34,6 +34,11 @@ _recent_topics: dict[str, tuple[str, float]] = {}
 # recording link can follow. Pruned like _recent_topics in case a call's
 # escalation lands after its recording was already saved.
 _escalated_sessions: dict[str, float] = {}
+# Owner alerts sent per call, so a looping or prompt-injected model can't flood
+# the owner's phone (and the Twilio bill). Rows are still always written.
+_MAX_ALERTS_PER_CALL = 3
+_MAX_ALERT_CHARS = 300
+_alerts_sent: dict[str, int] = {}
 
 
 def _prune_stale_topics(now_mono: float) -> None:
@@ -102,6 +107,13 @@ async def write_interaction_row(
         return False
 
     if not resolved and RESTAURANT.owner_phone:
+        alert_key = call_session_id or "no-session"
+        if _alerts_sent.get(alert_key, 0) >= _MAX_ALERTS_PER_CALL:
+            logger.warning("Owner alert cap reached for call {} — row written, no alert", alert_key)
+            return True
+        _alerts_sent[alert_key] = _alerts_sent.get(alert_key, 0) + 1
+        if len(_alerts_sent) > 500:
+            _alerts_sent.pop(next(iter(_alerts_sent)))
         if call_session_id:
             now_mono = time.monotonic()
             for stale in [s for s, t in _escalated_sessions.items() if now_mono - t > _PRUNE_AFTER_SECS]:
@@ -112,7 +124,7 @@ async def write_interaction_row(
         body = (
             f"{RESTAURANT.name}: {who}{callback} needs a follow-up — {topic}. "
             f"{details}".strip()
-        )
+        )[:_MAX_ALERT_CHARS]
         sms_sent, whatsapp_sent = await asyncio.gather(
             send_sms(RESTAURANT.owner_phone, body),
             send_whatsapp(RESTAURANT.owner_phone, body),

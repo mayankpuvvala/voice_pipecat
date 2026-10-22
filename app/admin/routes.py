@@ -410,7 +410,7 @@ def register_admin_routes(app: FastAPI) -> None:
     @app.get("/admin", dependencies=[Depends(require_admin)])
     async def admin_page() -> HTMLResponse:
         try:
-            calls = fetch_calls()
+            calls = await asyncio.to_thread(fetch_calls)
             error: str | None = None
         except Exception:  # noqa: BLE001 - show a generic message, don't leak internals or 500
             calls = []

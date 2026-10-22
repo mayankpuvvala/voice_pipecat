@@ -51,6 +51,8 @@ async def send_whatsapp(to: str, body: str) -> bool:
                 logger.warning("send_whatsapp: CallMeBot rejected the message: {}", response.text[:200])
                 return False
             return True
-    except Exception:
-        logger.exception("send_whatsapp: failed to send alert to {}", to)
+    except Exception as e:
+        # No traceback/message: httpx errors embed the request URL, which
+        # carries the CallMeBot apikey as a query parameter.
+        logger.error("send_whatsapp: failed to send alert ({})", type(e).__name__)
         return False

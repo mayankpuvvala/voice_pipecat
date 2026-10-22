@@ -14,6 +14,7 @@ call that should end but doesn't is worse than a late log row;
 from __future__ import annotations
 
 import json
+import re
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -48,20 +49,26 @@ _BACKFILL_SYSTEM_PROMPT = (
     "say anything else."
 )
 
+_BACKFILL_CONTEXT_MESSAGES = 8
+_BACKFILL_TIMEOUT_SECS = 15.0
+
 _ENDING_SIGNAL_PHRASES = (
     "goodbye",
     "have a great day",
     "talk soon",
     "hang up",
-    # Bare "112" catches every phrasing ("dial 112", "by dialing 112"); an
-    # exact-phrase match missed some live and left emergencies un-nudged.
-    "112",
 )
+
+# Standalone "112" still catches every phrasing ("dial 112", "by dialing
+# 112") but not digits inside a longer number ("98112 34567", "table 1120").
+_EMERGENCY_NUMBER = re.compile(r"(?<![\d,.])112(?![\d,.])")
 
 
 def _sounds_like_ending(text: str) -> bool:
     lowered = text.lower()
-    return any(phrase in lowered for phrase in _ENDING_SIGNAL_PHRASES)
+    return any(phrase in lowered for phrase in _ENDING_SIGNAL_PHRASES) or bool(
+        _EMERGENCY_NUMBER.search(lowered)
+    )
 
 
 _END_CALL_FOLLOWUP_PROMPT = (
@@ -83,7 +90,7 @@ async def _create_chat_completion(client: AsyncOpenAI, **kwargs: object) -> obje
     try:
         return await client.chat.completions.create(reasoning_effort="none", **kwargs)
     except Exception as e:
-        if "Unrecognized request argument supplied: reasoning_effort" in str(e):
+        if "reasoning_effort" in str(e):
             return await client.chat.completions.create(**kwargs)
         raise
 
@@ -220,7 +227,9 @@ class LogInteractionEnforcer(FrameProcessor):
         never the live call, so it's logged and dropped, not retried."""
         messages = [
             {"role": "system", "content": _BACKFILL_SYSTEM_PROMPT},
-            *[dict(m) for m in self._context.messages],
+            # Recent turns are enough to classify the last reply; the full
+            # history made each backfill's cost grow with call length.
+            *[dict(m) for m in self._context.messages[-_BACKFILL_CONTEXT_MESSAGES:]],
             {"role": "assistant", "content": reply_text},
         ]
         try:
@@ -233,7 +242,9 @@ class LogInteractionEnforcer(FrameProcessor):
             # per invocation sidesteps both. Part of a 2026-09-30 memory
             # cleanup pass -- see TROUBLESHOOTING.md for the actual root
             # cause found that day (sheets_client.py, not this).
-            async with AsyncOpenAI(api_key=settings.openai_api_key) as client:
+            async with AsyncOpenAI(
+                api_key=settings.openai_api_key, timeout=_BACKFILL_TIMEOUT_SECS, max_retries=1
+            ) as client:
                 response = await _create_chat_completion(
                     client,
                     model=settings.openai_model,

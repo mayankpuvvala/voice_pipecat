@@ -16,7 +16,7 @@ turns:
       - event: function_call
         calls:
           - name: check_availability
-            args: { date: "2026-10-21" }
+            args: { date: "2026-10-24" }
       - event: response
         eval: "reads back the date, time, and guest count and asks the caller to confirm before booking"
   - user: "Yes, that's right."

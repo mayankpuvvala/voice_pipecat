@@ -56,6 +56,7 @@ class DynamicPromptInjector(FrameProcessor):
                 re.IGNORECASE,
             )
             for topic in restaurant.topic_facts
+            if topic.keywords  # empty keywords would compile to an always-matching pattern
         }
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:

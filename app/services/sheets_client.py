@@ -92,6 +92,9 @@ def _forget_header(sheet_name: str) -> None:
         _header_cache.pop(sheet_name, None)
 
 
+_MAX_CELL_CHARS = 49_000
+
+
 def append_row(sheet_name: str, row: dict[str, Any]) -> None:
     """Append one row to `sheet_name`, ordered by that sheet's own header
     row (the single source of truth for column layout). Keys in `row` not
@@ -104,7 +107,8 @@ def append_row(sheet_name: str, row: dict[str, Any]) -> None:
             f"Sheet tab '{sheet_name}' has no header row — add one before writing rows"
         )
 
-    values = [str(row.get(col, "")) for col in header]
+    # Sheets rejects cells over 50,000 chars; truncate rather than lose the row.
+    values = [str(row.get(col, ""))[:_MAX_CELL_CHARS] for col in header]
     try:
         service.spreadsheets().values().append(
             spreadsheetId=settings.google_sheet_id,

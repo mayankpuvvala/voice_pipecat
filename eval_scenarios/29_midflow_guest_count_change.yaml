@@ -23,12 +23,12 @@ turns:
     expect:
       - event: response
         eval: "goes with the corrected count of five, not three, and asks for the next missing detail without restarting or re-asking for the name"
-  - user: "Tomorrow, 2026-10-21, at 1 PM."
+  - user: "Tomorrow, 2026-10-24, at 1 PM."
     send_after: { event: llm_response, delay_ms: 500 }
     expect:
       - event: function_call
         calls:
           - name: check_availability
-            args: { date: "2026-10-21", time: "13:00", guests_count: "5" }
+            args: { date: "2026-10-24", time: "13:00", guests_count: "5" }
       - event: response
         eval: "reads back the date, time, and a guest count of five and asks the caller to confirm before booking"

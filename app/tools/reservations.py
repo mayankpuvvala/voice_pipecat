@@ -17,7 +17,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams
 
 from app.config.restaurants import ACTIVE_RESTAURANT as RESTAURANT
-from app.pipeline.hours import is_within_hours
+from app.pipeline.hours import is_within_hours, normalize_slot
 from app.services import sheets_client
 
 _BOOKINGS_SHEET = "Bookings"
@@ -77,6 +77,19 @@ def book_table_succeeded_this_call(context: LLMContext) -> bool:
     return False
 
 
+_MAX_GUESTS_SANITY = 500  # typo/garbage guard, not a capacity cap (see module docstring)
+_MAX_NAME_CHARS = 80
+
+
+def parse_guests(value: object) -> int | None:
+    """A positive whole number of guests, else None ("0", "-3", "abc", "")."""
+    try:
+        n = int(str(value).strip())
+    except ValueError:
+        return None
+    return n if 1 <= n <= _MAX_GUESTS_SANITY else None
+
+
 def _already_booked_this_call(
     context: LLMContext, date: str, time: str, guests_count: str, caller_name: str
 ) -> bool:
@@ -86,7 +99,7 @@ def _already_booked_this_call(
     retry or a repeated "yes", which would append a duplicate Bookings row
     (and a second reservation for the owner to act on).
     """
-    wanted = (date, time, str(guests_count).strip(), caller_name.strip().lower())
+    wanted = (date, time, str(guests_count).strip(), caller_name.strip()[:_MAX_NAME_CHARS].lower())
     booked_args: dict[str, tuple[str, str, str, str]] = {}
     for message in context.messages:
         if message.get("role") == "assistant":
@@ -98,11 +111,14 @@ def _already_booked_this_call(
                     args = json.loads(function.get("arguments") or "{}")
                 except ValueError:
                     continue
+                norm_date, norm_time = normalize_slot(
+                    str(args.get("date", "")), str(args.get("time", ""))
+                )
                 booked_args[tool_call.get("id")] = (
-                    str(args.get("date", "")),
-                    str(args.get("time", "")),
+                    norm_date,
+                    norm_time,
                     str(args.get("guests_count", "")).strip(),
-                    str(args.get("caller_name", "")).strip().lower(),
+                    str(args.get("caller_name", "")).strip()[:_MAX_NAME_CHARS].lower(),
                 )
         elif message.get("role") == "tool" and message.get("tool_call_id") in booked_args:
             content = (message.get("content") or "").replace(" ", "")
@@ -129,6 +145,13 @@ async def check_availability(
         time: The reservation time as 24-hour HH:MM (e.g. "21:00" for 9 PM).
         guests_count: Number of guests, as a string, e.g. "5".
     """
+    guests = parse_guests(guests_count)
+    if guests is None:
+        await params.result_callback(
+            {"available": False, "reason": "guest count must be a whole number of at least 1"}
+        )
+        return
+    date, time = normalize_slot(date, time)
     ok, reason = is_within_hours(RESTAURANT, date, time)
     if not ok:
         await params.result_callback({"available": False, "reason": reason})
@@ -176,6 +199,16 @@ async def book_table(
             {"booked": False, "reason": "caller name is required — ask for it before booking"}
         )
         return
+
+    caller_name = caller_name.strip()[:_MAX_NAME_CHARS]
+    guests = parse_guests(guests_count)
+    if guests is None:
+        await params.result_callback(
+            {"booked": False, "reason": "guest count must be a whole number of at least 1"}
+        )
+        return
+    guests_count = str(guests)
+    date, time = normalize_slot(date, time)
 
     if _already_booked_this_call(params.context, date, time, guests_count, caller_name):
         logger.warning("book_table: identical booking already confirmed this call — not re-writing")

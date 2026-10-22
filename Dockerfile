@@ -11,6 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ app/
 
-EXPOSE 8080
+EXPOSE 7860
 
 CMD python -m app.main --host 0.0.0.0 --port ${PORT:-7860} -t ${TELEPHONY_TRANSPORT:-exotel} --proxy "${PUBLIC_PROXY_HOST:-$RAILWAY_PUBLIC_DOMAIN}"

@@ -21,9 +21,17 @@ def require_admin(
 ) -> None:
     if not settings.admin_username or not settings.admin_password:
         return
-    valid = bool(credentials) and secrets.compare_digest(
-        credentials.username, settings.admin_username
-    ) and secrets.compare_digest(credentials.password, settings.admin_password)
+    # Compare as bytes: compare_digest raises TypeError on non-ASCII str, which
+    # turned a bad login like username "é" into a 500. Both compares always run.
+    valid = False
+    if credentials:
+        user_ok = secrets.compare_digest(
+            credentials.username.encode(), settings.admin_username.encode()
+        )
+        pass_ok = secrets.compare_digest(
+            credentials.password.encode(), settings.admin_password.encode()
+        )
+        valid = user_ok and pass_ok
     if not valid:
         raise HTTPException(
             status_code=401,
