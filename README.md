@@ -279,6 +279,11 @@ Two things confirmed the hard way, not guessed:
   `UnicodeEncodeError: 'charmap' codec can't encode character '✗'` the
   moment a scenario fails — the same reason the Dockerfile sets both.
 
+**Dates are refreshed automatically.** `python scripts/refresh_eval_dates.py --run`
+rewrites every hardcoded scenario date to "tomorrow" (and scenario 04 to a real
+Monday), then runs the suite. Use `--check` to see what is stale without writing.
+Offline unit tests (free): `python -m pytest tests -q`.
+
 **Known fixture staleness, not a bot bug if you see these fail:**
 
 - A handful of scenarios hardcode an absolute reservation date, which

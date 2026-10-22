@@ -1,4 +1,4 @@
-# Dates bumped 2026-10-22 to 2026-10-24 (a Saturday) for a run on 2026-10-23, when "tomorrow" = 10-24.
+# Dates here are rewritten to "tomorrow" by scripts/refresh_eval_dates.py --run
 # Date bumped 2026-09-19 (was 2026-09-05, now past -- see README's Eval
 # suite section: no templating for "tomorrow", dates need periodic bumping).
 name: 03_reservation_happy_path

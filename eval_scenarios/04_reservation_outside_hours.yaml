@@ -1,3 +1,4 @@
+# eval-date: next-closed-day  (scripts/refresh_eval_dates.py keeps the date below a real Monday)
 # Date bumped 2026-10-20 (was Monday 2026-09-21, now past -- see README's
 # Eval suite section). Must stay a real Monday (spice_route_kitchen is
 # closed Mondays -- see app/pipeline/hours.py's weekday check).
