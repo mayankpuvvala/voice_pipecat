@@ -40,6 +40,12 @@ class Settings:
     # tested fastest and most reliable of the available alternatives.
     groq_model: str = os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
 
+    # Greeting audio cache (app/pipeline/tts_cache.py). Off by default.
+    # Bump TTS_CACHE_VERSION whenever the TTS voice/persona changes in code.
+    tts_cache_enabled: bool = os.environ.get("TTS_CACHE", "false").strip().lower() == "true"
+    tts_cache_dir: str = os.environ.get("TTS_CACHE_DIR", "")
+    tts_cache_version: str = os.environ.get("TTS_CACHE_VERSION", "1")
+
     sarvam_api_key: str = os.environ.get("SARVAM_API_KEY", "")
     deepgram_api_key: str = os.environ.get("DEEPGRAM_API_KEY", "")
     rumik_api_key: str = os.environ.get("RUMIK_API_KEY", "")

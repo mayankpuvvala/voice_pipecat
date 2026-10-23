@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import tempfile
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Request
@@ -53,6 +55,7 @@ from app.pipeline.recording import CallRecorder
 from app.pipeline.second_paragraph_filter import SecondParagraphFilter
 from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
+from app.pipeline.tts_cache import GreetingCache, GreetingRecorder, replay_frames
 from app.pipeline.tts_language_switcher import TTSLanguageSwitcher
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
 from app.services.stt_factory import build_stt, describe_stt
@@ -403,6 +406,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     turn_taking_guard = OneUtterancePerTurnGuard(context)
     second_paragraph_filter = SecondParagraphFilter()
     tts_language_switcher = TTSLanguageSwitcher(tts)
+    greeting_cache = GreetingCache(
+        Path(settings.tts_cache_dir or Path(tempfile.gettempdir()) / "tts_cache"),
+        namespace=f"{tts_provider_label}|v{settings.tts_cache_version}",
+        text=ACTIVE_RESTAURANT.first_message,
+    )
+    greeting_recorder = GreetingRecorder(greeting_cache)
     dynamic_prompt_injector = DynamicPromptInjector(
         context=context, restaurant=ACTIVE_RESTAURANT, llm=llm
     )
@@ -430,6 +439,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             second_paragraph_filter,
             tts_language_switcher,
             tts,
+            greeting_recorder,
             audiobuffer,
             transport.output(),
             assistant_aggregator,
@@ -512,6 +522,20 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             logger.debug("on_client_connected fired again for this call — not re-greeting")
             return
         greeted = True
+        cached_pcm = None
+        sample_rate = 0
+        if settings.tts_cache_enabled:
+            sample_rate = getattr(tts, "sample_rate", 0) or 0
+            cached_pcm = greeting_cache.load(sample_rate) if sample_rate else None
+        if cached_pcm:
+            # Replay stored audio; add the line to the LLM context ourselves,
+            # since it no longer passes through the TTS aggregator that would.
+            logger.info("Greeting served from TTS cache ({} bytes)", len(cached_pcm))
+            context.add_message({"role": "assistant", "content": ACTIVE_RESTAURANT.first_message})
+            await worker.queue_frames(replay_frames(cached_pcm, sample_rate))
+            return
+        if settings.tts_cache_enabled:
+            greeting_recorder.arm()
         await worker.queue_frames([TTSSpeakFrame(ACTIVE_RESTAURANT.first_message)])
 
     @transport.event_handler("on_client_disconnected")
