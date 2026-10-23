@@ -44,3 +44,14 @@ suite:
       - 27_bot_disclosure_question
       - 28_complaint_taken_as_message
       - 29_midflow_guest_count_change
+  # Live transfer (transfer_call). Same bot, but its runner_body gives it a
+  # "simulated" transfer line (never dials -- see bot() in app/main.py), so
+  # only these scenarios see the tool; everything above keeps the
+  # take-a-message flow every non-Plivo/Vobiz line still uses. The body
+  # file lives at the repo root on purpose: the harness spawns the bot with
+  # the body file's directory as cwd, and `-m app.main` needs the root.
+  - bot: ../app/main.py
+    runner_body: ../eval_transfer_runner_body.json
+    scenarios:
+      - 30_live_transfer_on_request
+      - 31_complaint_live_transfer

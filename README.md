@@ -39,6 +39,9 @@ Brewing are configured; add a new client the same way without restructuring.
 - **Tools:** `check_availability`, `book_table` and `end_call`, validated
   against the restaurant's own config and written straight to Google Sheets
   — no webhook hop mid-call.
+- **Live transfer:** on Plivo/Vobiz calls, `transfer_call` hands the caller
+  to a real person via the provider's Transfer API — see "Live call
+  transfer" below.
 - **Off the critical path:** interaction logging, call summaries and
   recording uploads (Google Drive) run in the background, so they never
   delay the caller's next turn.
@@ -47,7 +50,7 @@ Brewing are configured; add a new client the same way without restructuring.
   of leaving dead air, and alerts the owner by SMS / WhatsApp.
 - **Observability:** Langfuse per-call tracing, per-call provider tracking,
   `/admin/health` live checks, a multi-tenant admin dashboard, and a
-  29-scenario eval suite.
+  31-scenario eval suite.
 
 ## Setup
 
@@ -190,6 +193,72 @@ bookability is whether the time falls inside the posted operating hours.
 Sheets call from these tools goes through `asyncio.to_thread(...)` so it
 can't stall audio on the live call while it's in flight.
 
+## Live call transfer (Plivo / Vobiz)
+
+`transfer_call` (`app/tools/transfer_call.py`) connects the caller to a real
+person mid-call: when they ask for a human/manager/owner, make a complaint,
+or need something the bot can't do and want to talk to someone now. It is
+only offered on calls where it can work — real Plivo or Vobiz, the
+provider's REST credentials set, and a transfer number configured. On every
+other line (Exotel, Twilio, `/live`) the model never sees the tool or its
+prompt rules and keeps the existing take-a-message escalation.
+
+End to end:
+
+1. The model says a short handoff line and calls `transfer_call` in the same
+   response. Same structural gate as `end_call`: refused if nothing has been
+   spoken this turn.
+2. The transfer is logged as an escalation through the same
+   `write_interaction_row(resolved=False)` path as everything else, so the
+   owner gets the usual SMS + WhatsApp alert — no separate alert code.
+3. It waits for the handoff line to actually finish playing
+   (`app/pipeline/bot_speech_tracker.py`), switches off real Plivo's
+   hang-up-on-teardown (the call UUID doesn't change on transfer, so that
+   REST hang-up would drop the transferred caller), then calls the
+   provider's Transfer API (`app/services/call_transfer.py`):
+   `POST {base}/Account/{auth_id}/Call/{call_uuid}/` with `legs=aleg` and
+   `aleg_url=https://<host>/transfer-dial`. Base is
+   `https://api.plivo.com/v1` (HTTP Basic auth) or
+   `https://api.vobiz.ai/api/v1` (`X-Auth-ID`/`X-Auth-Token` headers).
+4. The provider fetches `/transfer-dial` (`app/transfer_routes.py`), which
+   returns `<Dial>` to the restaurant's transfer number — taken from config,
+   never from the request — with the DID the caller dialed as `callerId`.
+   When that Dial ends, `/transfer-dial-status` either just ends the call
+   (they talked to someone) or speaks one "no one could pick up, the owner
+   will call you back" line.
+5. The provider closes our WebSocket once the leg moves, which ends the
+   pipeline as a normal disconnect; a 10s fallback ends it anyway.
+
+If the Transfer API fails (bad creds, call gone, timeout), the bot speaks a
+short apology itself and offers to take a name and number, and the call
+carries on — never dead air, never a hang-up.
+
+Setup:
+
+- `Restaurant.transfer_number` (E.164) in `app/config/restaurants/*.py` —
+  falls back to `owner_phone`; both blank = transfer off for that client.
+- Real Plivo: `PLIVO_AUTH_ID`/`PLIVO_AUTH_TOKEN` (already required for
+  `/plivo-answer`). Vobiz: `VOBIZ_AUTH_ID`/`VOBIZ_AUTH_TOKEN` (new — Vobiz
+  calls never needed REST creds before). See `.env.example`.
+- Nothing to configure in either dashboard beyond the existing answer URL:
+  `/transfer-dial` is passed per request as `aleg_url`, on the same public
+  host the answer XML already uses.
+- Use a Vobiz/Plivo-owned DID as the number callers dial — it becomes the
+  transfer's `callerId`, and Vobiz warns an unowned caller ID can make the
+  outbound leg fail.
+
+Offline unit tests cover the gates, the provider requests (mocked HTTP), the
+XML routes, and the Plivo hang-up toggle:
+
+```bash
+uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
+.venv\Scripts\python.exe -m pytest
+```
+
+The eval suite exercises the model's side (when it transfers) with a
+simulated line that never dials — see `eval_scenarios/manifest.yaml`'s
+second suite entry.
+
 ## Run
 
 Hitting a real failure — deploy crash-loop, bot apologizing and hanging up,
@@ -244,7 +313,7 @@ Docker image this is controlled by the `TELEPHONY_TRANSPORT` env var
 
 ## Eval suite
 
-`eval_scenarios/manifest.yaml` lists 29 behavioral scenarios (text and
+`eval_scenarios/manifest.yaml` lists 31 behavioral scenarios (text and
 audio) run against a fresh `app/main.py -t eval` bot per scenario, judged by
 an ensemble (`eval_scenarios/services.py`'s `ensemble_judge_llm` — a
 gpt-4o-mini primary with a gpt-5-mini second opinion before trusting a

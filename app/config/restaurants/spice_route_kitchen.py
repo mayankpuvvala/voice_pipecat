@@ -96,6 +96,9 @@ Rules:
     # Not set — placeholder client, no real owner number to text. See
     # Restaurant.owner_phone's docstring before setting this for a real client.
     owner_phone="",
+    # Live-transfer line for transfer_call; blank falls back to owner_phone
+    # (also blank here, so live transfer stays off for this client).
+    transfer_number="",
     # Switched off Rumik after its wallet ran dry mid-call in prod — see
     # app/services/tts_factory.py for why Deepgram Flux's Naveen voice is
     # the only Indian-accented male option currently available.

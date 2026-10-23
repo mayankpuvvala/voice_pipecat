@@ -1,0 +1,14 @@
+# Same complaint as 28_complaint_taken_as_message, but on a line with live
+# transfer (see 30_live_transfer_on_request.yaml for how this suite entry
+# gets one): a complaint is handed to a real person live instead of being
+# taken as a message. Still must not promise a refund/fix itself.
+name: 31_complaint_live_transfer
+judge: !include judge_text.yaml
+turns:
+  - user: "I want to complain -- the food I got delivered last night was cold and half my order was missing."
+    expect:
+      - event: response
+        eval: "does not itself promise a refund, replacement, or other fix, and tells the caller it is connecting or transferring them to a staff member, the manager, or the owner"
+      - event: function_call
+        calls:
+          - name: transfer_call

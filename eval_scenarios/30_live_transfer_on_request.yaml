@@ -1,0 +1,22 @@
+# Live transfer (transfer_call, app/tools/transfer_call.py): an explicit
+# "let me talk to the manager" must be honored right away with a spoken
+# handoff line AND the tool call in the same response -- not the old
+# take-a-name-and-number flow, which is what this request gets on lines
+# without live transfer (Exotel, and every other scenario in this suite).
+#
+# Runs only under the manifest's second suite entry, whose runner_body
+# (../eval_transfer_runner_body.json) gives the bot a "simulated" transfer
+# line: same gates and ordering as a real Plivo/Vobiz transfer, never dials.
+# Text modality for the same reason as 15_goodbye_end_call_ordering.yaml:
+# audio `response` resolves only after TTS playback, after the
+# function_call event has already gone by.
+name: 30_live_transfer_on_request
+judge: !include judge_text.yaml
+turns:
+  - user: "Hi, can I please speak to the manager?"
+    expect:
+      - event: response
+        eval: "tells the caller it is connecting or transferring them to the manager or a staff member, and does NOT ask for their name or callback number first"
+      - event: function_call
+        calls:
+          - name: transfer_call

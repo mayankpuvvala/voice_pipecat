@@ -43,6 +43,11 @@ class Restaurant:
     # log_interaction.write_interaction_row. Never guess this; leave blank
     # until the client confirms their real number.
     owner_phone: str = ""
+    # Where transfer_call (app/tools/transfer_call.py) dials a live handoff
+    # to (E.164) — e.g. a front-desk/manager line that isn't the owner's
+    # own cell. Blank falls back to owner_phone; both blank means live
+    # transfer is simply unavailable and the bot keeps taking messages.
+    transfer_number: str = ""
 
     # Which STT/TTS vendor this restaurant's calls use — the one place to
     # switch either, per client. See app/services/stt_factory.py and
@@ -74,3 +79,9 @@ if settings.restaurant_id not in _RESTAURANTS:
     )
 
 ACTIVE_RESTAURANT = _RESTAURANTS.get(settings.restaurant_id, SPICE_ROUTE_KITCHEN)
+
+
+def transfer_target(restaurant: Restaurant) -> str:
+    """The number a live transfer dials: transfer_number, else owner_phone,
+    else "" (transfer unavailable for this restaurant)."""
+    return restaurant.transfer_number or restaurant.owner_phone
