@@ -61,3 +61,26 @@ def test_capture_ignores_non_mono():
     c.feed(TTSStartedFrame())
     c.feed(_audio(ch=2))
     assert c.feed(TTSStoppedFrame()) is None
+
+
+def test_warm_greeting_skips_when_already_cached(tmp_path):
+    import asyncio
+
+    from pipecat.pipeline.worker import PipelineParams
+
+    from app.pipeline.tts_cache import GreetingCache, warm_greeting
+
+    cache = GreetingCache(tmp_path, "ns", "hello")
+    cache.save(PipelineParams().audio_out_sample_rate, b"\x01\x00" * 10)
+    # tts=None would blow up if a pipeline were built -- proves it short-circuits.
+    assert asyncio.run(warm_greeting(None, cache)) is True
+
+
+def test_recorder_calls_on_stored(tmp_path):
+    from app.pipeline.tts_cache import GreetingCache, GreetingRecorder
+
+    seen = []
+    rec = GreetingRecorder(GreetingCache(tmp_path, "ns", "hi"), on_stored=seen.append)
+    assert rec._on_stored is not None
+    rec._on_stored(8000)
+    assert seen == [8000]

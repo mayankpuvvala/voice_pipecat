@@ -55,7 +55,7 @@ from app.pipeline.recording import CallRecorder
 from app.pipeline.second_paragraph_filter import SecondParagraphFilter
 from app.pipeline.tracing import setup_call_tracing
 from app.pipeline.transcript import build_transcript
-from app.pipeline.tts_cache import GreetingCache, GreetingRecorder, replay_frames
+from app.pipeline.tts_cache import GreetingCache, GreetingRecorder, replay_frames, warm_greeting
 from app.pipeline.tts_language_switcher import TTSLanguageSwitcher
 from app.pipeline.turn_taking_guard import OneUtterancePerTurnGuard
 from app.services.stt_factory import build_stt, describe_stt
@@ -262,6 +262,35 @@ async def _configure_log_verbosity() -> None:
     logger.add(sys.stderr, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
+def _make_greeting_cache() -> GreetingCache:
+    return GreetingCache(
+        Path(settings.tts_cache_dir or Path(tempfile.gettempdir()) / "tts_cache"),
+        namespace=f"{describe_tts(ACTIVE_RESTAURANT)}|v{settings.tts_cache_version}",
+        text=ACTIVE_RESTAURANT.first_message,
+    )
+
+
+_warm_task: asyncio.Task | None = None
+
+
+@runner_app.on_event("startup")
+async def _warm_greeting_cache() -> None:
+    # Background, never blocks startup; kept in a module global so the task
+    # isn't garbage-collected mid-run.
+    global _warm_task
+    if not settings.tts_cache_enabled:
+        return
+
+    async def _run() -> None:
+        try:
+            tts = await asyncio.to_thread(build_tts, ACTIVE_RESTAURANT, settings)
+            await warm_greeting(tts, _make_greeting_cache())
+        except Exception:
+            logger.exception("tts_cache: warm-up crashed; first call will record the greeting")
+
+    _warm_task = asyncio.create_task(_run())
+
+
 transport_params = {
     "exotel": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
@@ -406,11 +435,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     turn_taking_guard = OneUtterancePerTurnGuard(context)
     second_paragraph_filter = SecondParagraphFilter()
     tts_language_switcher = TTSLanguageSwitcher(tts)
-    greeting_cache = GreetingCache(
-        Path(settings.tts_cache_dir or Path(tempfile.gettempdir()) / "tts_cache"),
-        namespace=f"{tts_provider_label}|v{settings.tts_cache_version}",
-        text=ACTIVE_RESTAURANT.first_message,
-    )
+    greeting_cache = _make_greeting_cache()
     greeting_recorder = GreetingRecorder(greeting_cache)
     dynamic_prompt_injector = DynamicPromptInjector(
         context=context, restaurant=ACTIVE_RESTAURANT, llm=llm

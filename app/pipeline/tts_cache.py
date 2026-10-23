@@ -17,9 +17,11 @@ switching voice or telephony codec never replays the wrong audio.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 
@@ -42,6 +44,10 @@ class GreetingCache:
         self._dir = Path(base_dir)
         self._namespace = namespace
         self._text = text
+
+    @property
+    def text(self) -> str:
+        return self._text
 
     def _path(self, sample_rate: int) -> Path:
         digest = hashlib.sha256(f"{self._namespace}|{sample_rate}|{self._text}".encode()).hexdigest()[:24]
@@ -119,10 +125,11 @@ class GreetingRecorder(FrameProcessor):
     """Sits right after the TTS service. Passes every frame through untouched;
     while armed, records the next TTS utterance into the cache."""
 
-    def __init__(self, cache: GreetingCache, **kwargs) -> None:
+    def __init__(self, cache: GreetingCache, on_stored: Callable[[int], None] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._cache = cache
         self._capture = _Capture()
+        self._on_stored = on_stored
 
     def arm(self) -> None:
         self._capture.arm()
@@ -134,4 +141,55 @@ class GreetingRecorder(FrameProcessor):
             rate, pcm = done
             self._cache.save(rate, pcm)
             logger.info("tts_cache: stored greeting ({} bytes @ {} Hz)", len(pcm), rate)
+            if self._on_stored:
+                self._on_stored(rate)
         await self.push_frame(frame, direction)
+
+
+async def warm_greeting(tts, cache: GreetingCache, timeout: float = 30.0) -> bool:
+    """Synthesize the greeting once at startup so even the first call is a cache hit.
+
+    Runs a throwaway pipeline (TTS -> recorder, no phone) with the same default
+    PipelineParams a real call uses, so the TTS runs at the same sample rate and
+    the stored file's key matches what a call looks up. Never raises: a failed
+    warm-up just means the first call records the greeting itself, as before.
+    """
+    from pipecat.frames.frames import TTSSpeakFrame
+    from pipecat.pipeline.pipeline import Pipeline
+    from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+    from pipecat.workers.runner import WorkerRunner
+
+    params = PipelineParams()
+    if cache.load(params.audio_out_sample_rate):
+        logger.info("tts_cache: greeting already cached, skipping warm-up")
+        return True
+
+    stored = asyncio.Event()
+    recorder = GreetingRecorder(cache, on_stored=lambda _rate: stored.set())
+    runner = None
+    run_task = None
+    try:
+        worker = PipelineWorker(
+            Pipeline([tts, recorder]), params=params, idle_timeout_secs=None, enable_rtvi=False
+        )
+        runner = WorkerRunner(handle_sigint=False)
+        await runner.add_workers(worker)
+        run_task = asyncio.create_task(runner.run())
+        recorder.arm()
+        await worker.queue_frames([TTSSpeakFrame(cache.text)])
+        await asyncio.wait_for(stored.wait(), timeout)
+        return True
+    except Exception:
+        logger.exception("tts_cache: greeting warm-up failed; first call will record it instead")
+        return False
+    finally:
+        if runner:
+            try:
+                await runner.cancel()
+            except Exception:
+                logger.exception("tts_cache: warm-up runner did not cancel cleanly")
+        if run_task:
+            try:
+                await asyncio.wait_for(run_task, 10)
+            except BaseException:
+                pass
