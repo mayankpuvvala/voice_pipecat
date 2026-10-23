@@ -22,7 +22,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config.restaurants import ACTIVE_RESTAURANT  # noqa: E402
 from app.services import sheets_client  # noqa: E402
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -35,16 +34,17 @@ def _normalize(sentence: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=40)
-    parser.add_argument("--bot", default=ACTIVE_RESTAURANT.bot_name, help="speaker label in transcripts")
+    parser.add_argument("--bot", default="", help="only this speaker label (default: every non-Caller speaker, since the bot's name has changed over time)")
     args = parser.parse_args()
 
     counts: Counter[str] = Counter()
     chars: Counter[str] = Counter()
     for row in sheets_client.read_rows("Recordings"):
         for line in str(row.get("Transcript", "")).splitlines():
-            if not line.startswith(f"{args.bot}:"):
+            speaker, sep, text = line.partition(":")
+            if not sep or speaker == "Caller" or len(speaker) > 20 or (args.bot and speaker != args.bot):
                 continue
-            for sentence in _SENTENCE.split(line[len(args.bot) + 1 :].strip()):
+            for sentence in _SENTENCE.split(text.strip()):
                 key = _normalize(sentence)
                 if key:
                     counts[key] += 1
